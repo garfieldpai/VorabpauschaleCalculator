@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vorabpauschale Rechner — Foreign Fund Advance Lump Sum Calculator</title>
+<style>
+  :root {
+    --ink: #1c2024;
+    --paper: #faf8f4;
+    --paper-raised: #ffffff;
+    --line: #d8d2c4;
+    --accent: #8a3b2e;
+    --accent-soft: #f0e0d8;
+    --mono: #2c5f4a;
+    --mono-soft: #e3ece6;
+    --muted: #6b6558;
+    --danger: #b33a3a;
+    --shadow: 0 1px 2px rgba(28,32,36,0.06), 0 2px 8px rgba(28,32,36,0.04);
+    --radius: 6px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: 'Iowan Old Style', 'Palatino Linotype', Georgia, serif;
+    background: var(--paper);
+    color: var(--ink);
+    line-height: 1.5;
+  }
+  .mono { font-family: 'IBM Plex Mono', 'SF Mono', Consolas, monospace; }
+
+  header {
+    border-bottom: 1px solid var(--line);
+    padding: 28px 32px 20px;
+    background: var(--paper-raised);
+  }
+  header .eyebrow {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 6px;
+  }
+  header h1 {
+    margin: 0 0 4px;
+    font-size: 28px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  header p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 14.5px;
+    max-width: 640px;
+  }
+  nav.tabs {
+    display: flex;
+    gap: 4px;
+    margin-top: 18px;
+  }
+  nav.tabs button {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12.5px;
+    letter-spacing: 0.02em;
+    padding: 8px 14px;
+    border: 1px solid var(--line);
+    border-bottom: none;
+    background: var(--paper);
+    color: var(--muted);
+    cursor: pointer;
+    border-radius: 5px 5px 0 0;
+  }
+  nav.tabs button.active {
+    background: var(--paper-raised);
+    color: var(--ink);
+    border-color: var(--ink);
+    font-weight: 600;
+  }
+
+  main { max-width: 1080px; margin: 0 auto; padding: 28px 32px 80px; }
+  .view { display: none; }
+  .view.active { display: block; }
+
+  .card {
+    background: var(--paper-raised);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 22px 24px;
+    margin-bottom: 18px;
+  }
+  .card h2 {
+    margin: 0 0 14px;
+    font-size: 17px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .card h2 .num {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--accent);
+    border: 1px solid var(--accent-soft);
+    background: var(--accent-soft);
+    border-radius: 50%;
+    width: 22px; height: 22px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .grid { display: grid; gap: 14px; }
+  .grid.cols-2 { grid-template-columns: 1fr 1fr; }
+  .grid.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+  .grid.cols-4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
+  @media (max-width: 760px) {
+    .grid.cols-2, .grid.cols-3, .grid.cols-4 { grid-template-columns: 1fr; }
+  }
+
+  label {
+    display: block;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 5px;
+  }
+  input, select {
+    width: 100%;
+    padding: 9px 10px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 14px;
+    background: var(--paper);
+    color: var(--ink);
+  }
+  input:focus, select:focus {
+    outline: none;
+    border-color: var(--accent);
+    background: var(--paper-raised);
+  }
+  .field { margin-bottom: 0; }
+  .helptext { font-size: 12px; color: var(--muted); margin-top: 4px; font-family: 'IBM Plex Mono', monospace; }
+
+  .btn {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    padding: 9px 16px;
+    border-radius: 4px;
+    border: 1px solid var(--line);
+    background: var(--paper-raised);
+    color: var(--ink);
+    cursor: pointer;
+    letter-spacing: 0.01em;
+  }
+  .btn:hover { border-color: var(--ink); }
+  .btn.primary { background: var(--ink); color: var(--paper-raised); border-color: var(--ink); }
+  .btn.primary:hover { background: #34383d; }
+  .btn.danger { color: var(--danger); border-color: var(--danger); background: transparent; }
+  .btn.danger:hover { background: #fbeaea; }
+  .btn.small { padding: 5px 10px; font-size: 12px; }
+  .btn-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  table.mono-table { font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); font-weight: 500; }
+  tr:last-child td { border-bottom: none; }
+  td.num, th.num { text-align: right; }
+  tr.capped td.vp { color: var(--accent); }
+  tr.zero td.vp { color: var(--muted); }
+
+  .pill {
+    display: inline-block;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    padding: 2px 8px;
+    border-radius: 99px;
+    background: var(--mono-soft);
+    color: var(--mono);
+  }
+  .pill.warn { background: var(--accent-soft); color: var(--accent); }
+
+  .fund-card { border-left: 3px solid var(--mono); }
+  .fund-card.lost-value { border-left-color: var(--accent); }
+  .fund-header {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-bottom: 4px;
+  }
+  .fund-header h3 { margin: 0; font-size: 16px; font-weight: 600; }
+  .fund-total { font-family: 'IBM Plex Mono', monospace; font-size: 19px; font-weight: 600; }
+  .fund-meta { font-size: 12.5px; color: var(--muted); margin-bottom: 14px; }
+
+  .summary-bar {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 18px 24px;
+    background: var(--ink);
+    color: var(--paper-raised);
+    border-radius: var(--radius);
+    margin-bottom: 22px;
+  }
+  .summary-bar .label { font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; opacity: 0.7; }
+  .summary-bar .value { font-family: 'IBM Plex Mono', monospace; font-size: 28px; font-weight: 600; }
+
+  .empty-state {
+    text-align: center;
+    padding: 50px 20px;
+    color: var(--muted);
+  }
+  .empty-state .icon { font-size: 32px; margin-bottom: 10px; opacity: 0.5; }
+
+  .help-section { margin-bottom: 28px; }
+  .help-section h3 { font-size: 16px; margin-bottom: 8px; }
+  .help-section p { font-size: 14.5px; color: #44403a; }
+  .law-quote {
+    border-left: 3px solid var(--line);
+    padding: 10px 16px;
+    margin: 12px 0;
+    font-size: 13.5px;
+    color: var(--muted);
+    font-style: italic;
+    background: var(--paper);
+  }
+  .law-quote a { color: var(--mono); text-decoration: none; border-bottom: 1px dotted var(--mono); }
+  details { margin: 10px 0; border: 1px solid var(--line); border-radius: 4px; background: var(--paper); }
+  details summary { padding: 10px 14px; cursor: pointer; font-weight: 600; font-size: 14px; }
+  details .content { padding: 0 14px 14px; font-size: 13.5px; color: #44403a; }
+  details .content table { margin-top: 8px; }
+
+  footer {
+    text-align: center;
+    font-size: 12px;
+    color: var(--muted);
+    padding: 30px 20px;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+  footer a { color: var(--mono); }
+
+  .toast {
+    position: fixed; bottom: 24px; right: 24px;
+    background: var(--ink); color: var(--paper-raised);
+    padding: 12px 18px; border-radius: 6px;
+    font-family: 'IBM Plex Mono', monospace; font-size: 13px;
+    box-shadow: var(--shadow);
+    transform: translateY(20px); opacity: 0;
+    transition: all 0.25s ease;
+    pointer-events: none;
+    z-index: 100;
+  }
+  .toast.show { transform: translateY(0); opacity: 1; }
+
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(28,32,36,0.4);
+    display: none; align-items: center; justify-content: center; z-index: 200;
+  }
+  .modal-overlay.show { display: flex; }
+  .modal {
+    background: var(--paper-raised); border-radius: 8px; padding: 24px;
+    max-width: 480px; width: 90%; box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+  }
+  .modal h3 { margin-top: 0; }
+
+  .disclaimer-banner {
+    background: var(--accent-soft);
+    color: #5c2a1f;
+    border-bottom: 1px solid #d9b8a8;
+    padding: 10px 32px;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  .disclaimer-banner strong { font-weight: 700; }
+  .disclaimer-banner button {
+    background: none;
+    border: none;
+    font-size: 18px;
+    line-height: 1;
+    color: #5c2a1f;
+    cursor: pointer;
+    padding: 0 2px;
+    flex-shrink: 0;
+  }
+  .disclaimer-banner button:hover { opacity: 0.6; }
+  .disclaimer-banner.hidden { display: none; }
+  @media (max-width: 760px) {
+    .disclaimer-banner { padding: 10px 16px; font-size: 12.5px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="disclaimer-banner" id="disclaimerBanner">
+  <span><strong>Not tax advice.</strong> This tool is a calculation aid built from the statutory text of §18 InvStG and BMF guidance — it has not been reviewed by a tax professional. Verify your results, especially Teilfreistellung eligibility, with a Steuerberater before filing.</span>
+  <button id="dismissDisclaimer" aria-label="Dismiss">&times;</button>
+</div>
+
+<header>
+  <div class="eyebrow">§18 InvStG — Foreign Investment Funds</div>
+  <h1>Vorabpauschale Rechner</h1>
+  <p>Calculate the German advance lump sum (Vorabpauschale) for foreign ETFs and mutual funds — including SIP/Sparplan tranches, currency conversion, and year-over-year continuation. Built against the literal text of §18 InvStG and the BMF's 2019 application guidance.</p>
+  <nav class="tabs">
+    <button class="tab-btn active" data-view="calculator">Calculator</button>
+    <button class="tab-btn" data-view="summary">Summary &amp; Export</button>
+    <button class="tab-btn" data-view="help">Help &amp; Tax Law</button>
+  </nav>
+</header>
+
+<main>
+
+  <!-- ============ CALCULATOR VIEW ============ -->
+  <section class="view active" id="view-calculator">
+
+    <div class="card">
+      <h2><span class="num">Y</span>Tax year settings</h2>
+      <div class="grid cols-3">
+        <div class="field">
+          <label for="taxYear">Calendar year (income accrues)</label>
+          <select id="taxYear"></select>
+          <div class="helptext">Belongs in the tax return for the FOLLOWING year</div>
+        </div>
+        <div class="field">
+          <label for="basiszins">Basiszins (%)</label>
+          <input type="number" id="basiszins" step="0.0001" value="2.29">
+          <div class="helptext">Auto-filled; verify against current BMF announcement</div>
+        </div>
+        <div class="field">
+          <label for="fxRate">FX rate on 31 Dec (native currency per 1 EUR)</label>
+          <input type="number" id="fxRate" step="0.0001" placeholder="e.g. 93.06 for INR">
+        </div>
+      </div>
+    </div>
+
+    <div id="fundsContainer"></div>
+
+    <div class="btn-row" style="margin-top: 10px;">
+      <button class="btn primary" id="addFundBtn">+ Add a fund</button>
+      <button class="btn" id="loadPriorYearBtn">↻ Continue from prior year file</button>
+    </div>
+
+  </section>
+
+  <!-- ============ SUMMARY VIEW ============ -->
+  <section class="view" id="view-summary">
+
+    <div class="summary-bar">
+      <div>
+        <div class="label">Total Vorabpauschale, this calendar year</div>
+        <div class="value" id="grandTotalEUR">€0.00</div>
+      </div>
+      <div>
+        <div class="label">Taxable after Teilfreistellung</div>
+        <div class="value" id="grandTotalTaxable">€0.00</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="num">↓</span>Per-fund breakdown</h2>
+      <table id="summaryTable">
+        <thead>
+          <tr><th>Fund</th><th class="num">Native total</th><th class="num">EUR total</th><th class="num">Taxable EUR</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2><span class="num">⇄</span>Save &amp; continue next year</h2>
+      <p style="font-size: 13.5px; color: var(--muted); margin-top: 0;">
+        Export your fund list (ISINs, names, currency, unit balances) as a JSON file. Next year,
+        load it back in, update the NAVs and add the new year's SIP purchases — no need to
+        re-enter fund details from scratch.
+      </p>
+      <div class="btn-row">
+        <button class="btn primary" id="exportJsonBtn">↓ Export JSON</button>
+        <button class="btn" id="importJsonBtn">↑ Import JSON</button>
+        <input type="file" id="fileInput" accept=".json" style="display:none">
+        <button class="btn" id="driveConnectBtn">⛁ Connect Google Drive</button>
+      </div>
+      <div id="driveStatus" style="margin-top: 10px; font-size: 12.5px; color: var(--muted);"></div>
+    </div>
+
+  </section>
+
+  <!-- ============ HELP VIEW ============ -->
+  <section class="view" id="view-help">
+
+    <div class="help-section">
+      <h3>What is the Vorabpauschale?</h3>
+      <p>
+        For investment funds that don't distribute all their income each year (or are domiciled
+        outside Germany and have no German custodian to withhold tax automatically), German tax law
+        deems a minimum return to have been received — even if you haven't sold anything. This
+        deemed amount is the <strong>Vorabpauschale</strong> ("advance lump sum"). It's taxed in the
+        year it accrues, on the same basis as other capital income.
+      </p>
+      <div class="law-quote">
+        §18 Abs. 1 InvStG: "Die Vorabpauschale ist der Betrag, um den die Ausschüttungen eines
+        Investmentfonds innerhalb eines Kalenderjahres den Basisertrag für dieses Kalenderjahr
+        unterschreiten..."
+      </div>
+    </div>
+
+    <div class="help-section">
+      <h3>The formula, step by step</h3>
+      <details open>
+        <summary>1. Basisertrag (deemed minimum return)</summary>
+        <div class="content">
+          <p><span class="mono">Basisertrag = NAV at start of year × Basiszins × 70%</span></p>
+          <p>The NAV used is the fund's value on 1 January — the <em>same figure for every unit</em>,
+          regardless of when during the year you actually bought it.</p>
+        </div>
+      </details>
+      <details>
+        <summary>2. Mehrbetrag (the cap)</summary>
+        <div class="content">
+          <p><span class="mono">Mehrbetrag = (NAV at year end − NAV at year start) + distributions per unit</span></p>
+          <p>The Basisertrag can never exceed this — you're never deemed to have earned more than
+          the fund actually returned. If the fund lost value, the Mehrbetrag is capped at zero.</p>
+        </div>
+      </details>
+      <details>
+        <summary>3. Acquisition-year reduction (for SIP / mid-year purchases)</summary>
+        <div class="content">
+          <p>Units bought during the year get a reduced Vorabpauschale: 1/12 less for each full
+          month before the purchase month. A unit bought in August keeps 5/12 of the full-year amount
+          (Aug, Sep, Oct, Nov, Dec).</p>
+        </div>
+      </details>
+      <details>
+        <summary>4. Rounding — only once, at the very end</summary>
+        <div class="content">
+          <p>Per the BMF's 21 May 2019 circular (para 18.4), the per-unit Basisertrag must be kept to
+          at least 4 decimal places. Rounding to cents happens only <em>after</em> multiplying by the
+          total units held on 31 December — never before.</p>
+          <div class="law-quote">
+            "Der Basisertrag ist mit mindestens vier Nachkommastellen anzusetzen und erst nach der
+            Multiplikation mit der Anzahl der... Anteile... ist eine kaufmännische Rundung auf zwei
+            Nachkommastellen vorzunehmen."
+          </div>
+        </div>
+      </details>
+      <details>
+        <summary>5. Currency conversion</summary>
+        <div class="content">
+          <p>The Vorabpauschale is deemed received on the first business day of the following year.
+          This tool converts the final native-currency total to EUR using the exchange rate on
+          31 December of the relevant year — once, at the end, not per tranche.</p>
+        </div>
+      </details>
+      <details>
+        <summary>6. Teilfreistellung (partial exemption) — verify before relying on it</summary>
+        <div class="content">
+          <p>German/EU-regulated equity funds get a 30% exemption. Whether a given foreign fund
+          (e.g. one regulated by SEBI in India, or another non-EU regulator) qualifies as an
+          "Investmentfonds" under §1 InvStG at all — and therefore for this exemption — is fact-specific
+          and not assumed automatically by this tool. Leave the Teilfreistellung toggle off unless
+          you've confirmed the fund's qualification, ideally with a Steuerberater.</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="help-section">
+      <h3>Worked example</h3>
+      <p>A fund's NAV is 100 on 1 Jan and 110 on 31 Dec. Basiszins is 2.29%. You held 1,000 units
+      all year, plus bought 200 more in July.</p>
+      <table class="mono-table">
+        <thead><tr><th>Tranche</th><th class="num">Units</th><th class="num">Months held</th><th class="num">VP</th></tr></thead>
+        <tbody>
+          <tr><td>Held since before the year</td><td class="num">1,000</td><td class="num">12/12</td><td class="num">€1.603 × 1,000 = €1,603.00</td></tr>
+          <tr><td>Bought in July</td><td class="num">200</td><td class="num">6/12</td><td class="num">€0.8015 × 200 = €160.30</td></tr>
+        </tbody>
+      </table>
+      <p style="margin-top:10px;">Basisertrag/unit = 100 × 2.29% × 70% = €1.603 (well under the
+      €10 Mehrbetrag cap, so not capped). Total Vorabpauschale: <strong>€1,763.30</strong>.</p>
+    </div>
+
+    <div class="help-section">
+      <h3>Primary sources</h3>
+      <ul style="font-size: 14px; color: #44403a;">
+        <li><a href="https://www.gesetze-im-internet.de/invstg_2018/__18.html" target="_blank" rel="noopener">§18 InvStG 2018 — full statutory text (gesetze-im-internet.de)</a></li>
+        <li>BMF-Schreiben vom 21.05.2019, "Investmentsteuerreformgesetz — Anwendungsfragen" (§18 Anwendungsfragen)</li>
+        <li><a href="https://www.bundesbank.de" target="_blank" rel="noopener">Deutsche Bundesbank — annual Basiszins publication</a></li>
+      </ul>
+      <p style="font-size: 13px; color: var(--muted);">
+        This tool is provided for informational and organisational purposes. It is not tax advice.
+        Verify your specific fund's InvStG classification and Teilfreistellung eligibility with a
+        qualified Steuerberater before filing.
+      </p>
+    </div>
+
+  </section>
+
+</main>
+
+<footer>
+  Vorabpauschale Rechner · open source on <a href="#" id="githubLink">GitHub</a> · contributions welcome
+</footer>
+
+<div class="toast" id="toast"></div>
+
+<div class="modal-overlay" id="addFundModal">
+  <div class="modal">
+    <h3>Add a fund</h3>
+    <div class="field" style="margin-bottom: 12px;">
+      <label for="newFundName">Fund name</label>
+      <input type="text" id="newFundName" placeholder="e.g. HDFC Mid-Cap Opportunities Fund">
+    </div>
+    <div class="field" style="margin-bottom: 12px;">
+      <label for="newFundIsin">ISIN (optional)</label>
+      <input type="text" id="newFundIsin" placeholder="e.g. INF179K01CR2">
+    </div>
+    <div class="field" style="margin-bottom: 16px;">
+      <label for="newFundCurrency">Reporting currency</label>
+      <select id="newFundCurrency">
+        <option value="INR">INR — Indian Rupee</option>
+        <option value="USD">USD — US Dollar</option>
+        <option value="GBP">GBP — British Pound</option>
+        <option value="CHF">CHF — Swiss Franc</option>
+        <option value="JPY">JPY — Japanese Yen</option>
+        <option value="OTHER">Other</option>
+      </select>
+    </div>
+    <div class="btn-row">
+      <button class="btn primary" id="confirmAddFundBtn">Add fund</button>
+      <button class="btn" id="cancelAddFundBtn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script src="engine.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
