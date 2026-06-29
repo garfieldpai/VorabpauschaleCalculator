@@ -253,10 +253,44 @@ function computeFund(fund) {
 }
 
 function recalcAll() {
-  renderFunds();
+  // Lightweight path: update only the COMPUTED/DERIVED numbers in the DOM
+  // (VP per tranche, fund totals, months-held) without touching any <input>
+  // elements. This is what runs on every keystroke, so it must never call
+  // renderFunds()/innerHTML on a container that holds the field being typed
+  // into — doing so recreates the input and the browser drops keyboard focus,
+  // forcing the user to click back in after every character.
+  state.funds.forEach(fund => {
+    const result = computeFund(fund);
+
+    const card = document.querySelector(`[data-fund-card="${fund.id}"]`);
+    if (!card) return; // structural render hasn't happened yet for this fund
+
+    const totalEl = card.querySelector('.fund-total');
+    if (totalEl) totalEl.textContent = result ? `€${result.totalEUR.toFixed(2)}` : '—';
+
+    card.classList.toggle('lost-value', !!(result && result.isCapped));
+    const cappedPill = card.querySelector('[data-capped-pill]');
+    if (cappedPill) cappedPill.style.display = (result && result.isCapped) ? 'inline' : 'none';
+
+    const validTranches = fund.tranches.filter(t => t.units != null && t.units > 0);
+    fund.tranches.forEach(tranche => {
+      const trancheIdx = validTranches.findIndex(t => t.id === tranche.id);
+      const trancheResult = (result && trancheIdx >= 0) ? result.tranches[trancheIdx] : null;
+      const isOpening = tranche.acquisitionMonth == null;
+      const monthsHeld = trancheResult ? trancheResult.monthsHeld : (isOpening ? 12 : (13 - (tranche.acquisitionMonth || 1)));
+      const vpDisplay = trancheResult ? trancheResult.vpForTranche.toFixed(4) : '—';
+
+      const monthsEl = card.querySelector(`[data-months-held="${tranche.id}"]`);
+      if (monthsEl) monthsEl.textContent = `${monthsHeld}/12`;
+      const vpEl = card.querySelector(`[data-vp-display="${tranche.id}"]`);
+      if (vpEl) vpEl.textContent = vpDisplay;
+    });
+  });
 }
 
-// ---------- Rendering: funds ----------
+// ---------- Rendering: funds (STRUCTURAL — rebuilds DOM, only call on
+// add/remove fund or tranche, or other changes that alter which elements
+// exist. Never call this from an input's keystroke handler.) ----------
 function renderFunds() {
   const container = document.getElementById('fundsContainer');
   container.innerHTML = '';
@@ -274,6 +308,7 @@ function renderFunds() {
     const result = computeFund(fund);
     const card = document.createElement('div');
     card.className = 'card fund-card' + (result && result.isCapped ? ' lost-value' : '');
+    card.dataset.fundCard = fund.id;
 
     const totalDisplay = result ? `€${result.totalEUR.toFixed(2)}` : '—';
     const displayCurrency = fund.currency === 'OTHER' ? (fund.customCurrency || '???') : fund.currency;
@@ -287,7 +322,7 @@ function renderFunds() {
         <h3>${escapeHtml(fund.name)} ${fund.isin ? `<span class="pill">${escapeHtml(fund.isin)}</span>` : ''}</h3>
         <div class="fund-total">${totalDisplay}</div>
       </div>
-      <div class="fund-meta">${displayCurrency}${result && result.isCapped ? ' &middot; <span class="pill warn">capped at Mehrbetrag</span>' : ''}</div>
+      <div class="fund-meta">${displayCurrency} <span data-capped-pill style="display:${result && result.isCapped ? 'inline' : 'none'};">&middot; <span class="pill warn">capped at Mehrbetrag</span></span></div>
 
       <div class="grid cols-2" style="margin-bottom:14px; align-items:end;">
         <div class="field">
@@ -374,8 +409,8 @@ function renderTrancheRow(fund, tranche, idx, result) {
           ${MONTH_NAMES.map((m, i) => `<option value="${i+1}" ${tranche.acquisitionMonth === i+1 ? 'selected' : ''}>${m}</option>`).join('')}
         </select>`}
       </td>
-      <td class="num mono">${monthsHeld}/12</td>
-      <td class="num mono vp">${vpDisplay}</td>
+      <td class="num mono" data-months-held="${tranche.id}">${monthsHeld}/12</td>
+      <td class="num mono vp" data-vp-display="${tranche.id}">${vpDisplay}</td>
       <td><button class="btn small danger" data-action="removeTranche" data-fund="${fund.id}" data-tranche="${tranche.id}">&times;</button></td>
     </tr>
   `;
