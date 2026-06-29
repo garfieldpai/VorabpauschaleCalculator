@@ -27,6 +27,12 @@ See the in-app **Help & Tax Law** tab for the full step-by-step explanation with
 5. Rounding to cents happens **once**, after multiplying by year-end unit count — never per-unit beforehand
 6. The final native-currency total is converted to EUR once, using the 31 December exchange rate
 
+## Exchange rates
+
+Pick a currency from the dropdown when adding a fund — INR, USD, and GBP are pinned at the top as the most common cases, with other major currencies and a free-text ISO code option below. Once a fund's currency and the tax year are set, click **Fetch rate** to pull the 31 December rate automatically from the [Frankfurter API](https://www.frankfurter.dev) — a free, open-source, ECB-sourced exchange rate service with no API key and no usage limits.
+
+The ECB doesn't publish rates on weekends or EU holidays, so if 31 December falls on a non-trading day, Frankfurter returns the nearest prior business day's rate instead — the tool shows you exactly which date was actually used rather than silently substituting it. There's also a manual override field next to the fetch button, for entering a rate yourself (e.g. an actual bank conversion rate) instead.
+
 ## Running locally
 
 No build step — it's plain HTML/CSS/JS.

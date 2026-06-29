@@ -5,24 +5,51 @@
  * {
  *   taxYear: 2024,
  *   basiszins: 0.0229,
- *   fxRateYearEnd: 93.0634,
  *   funds: [
  *     {
  *       id: 'f1', name: 'HDFC Mid-Cap...', isin: 'INF179K01CR2', currency: 'INR',
  *       navStart: 192.4350, navEnd: 203.7350, distributionsPerUnit: 0,
  *       teilfreistellungApplies: false,
+ *       fxRateYearEnd: 93.0634, fxRateDate: '2024-12-31', fxRateSource: 'frankfurter',
  *       tranches: [ { id: 't1', units: 4235.489, acquisitionMonth: null, label: 'Held since before 2024' }, ... ]
  *     }
  *   ]
  * }
+ *
+ * FX rate moved to per-fund (not global) since each fund can be denominated in a
+ * different currency. Rates are auto-fetched from the Frankfurter API (free,
+ * ECB-sourced, no key required: https://www.frankfurter.dev) for the requested
+ * date, but the ECB does not publish on weekends/EU holidays — Frankfurter returns
+ * the nearest prior business day's rate instead, and tells us which date it actually
+ * used via the response's `date` field. We surface that actual date to the user
+ * rather than silently substituting it, since "31 Dec" and "the rate Frankfurter
+ * happened to return" are not always the same date.
  */
 
 const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const FRANKFURTER_BASE = 'https://api.frankfurter.dev/v1';
+
+const TOP_CURRENCIES = [
+  { code: 'INR', label: 'INR — Indian Rupee' },
+  { code: 'USD', label: 'USD — US Dollar' },
+  { code: 'GBP', label: 'GBP — British Pound' },
+];
+const OTHER_CURRENCIES = [
+  { code: 'CHF', label: 'CHF — Swiss Franc' },
+  { code: 'JPY', label: 'JPY — Japanese Yen' },
+  { code: 'CAD', label: 'CAD — Canadian Dollar' },
+  { code: 'AUD', label: 'AUD — Australian Dollar' },
+  { code: 'SGD', label: 'SGD — Singapore Dollar' },
+  { code: 'CNY', label: 'CNY — Chinese Yuan' },
+  { code: 'HKD', label: 'HKD — Hong Kong Dollar' },
+  { code: 'SEK', label: 'SEK — Swedish Krona' },
+  { code: 'NOK', label: 'NOK — Norwegian Krone' },
+  { code: 'OTHER', label: 'Other (enter ISO code)' },
+];
 
 let state = {
   taxYear: new Date().getFullYear() - 1,
   basiszins: BASISZINS_BY_YEAR[new Date().getFullYear() - 1] || 0.0229,
-  fxRateYearEnd: null,
   funds: [],
 };
 
@@ -93,39 +120,99 @@ document.getElementById('basiszins').addEventListener('input', (e) => {
   recalcAll();
   saveToLocalStorage();
 });
-document.getElementById('fxRate').addEventListener('input', (e) => {
-  state.fxRateYearEnd = parseFloat(e.target.value) || null;
-  recalcAll();
-  saveToLocalStorage();
-});
 
-// ---------- Add fund modal ----------
+// ---------- FX rate fetching (Frankfurter API — free, ECB-sourced, no key) ----------
+const fxCache = {}; // key: `${currency}_${date}` -> { rate, actualDate }
+
+async function fetchFxRate(currency, isoDate) {
+  if (currency === 'EUR') return { rate: 1, actualDate: isoDate };
+  const cacheKey = `${currency}_${isoDate}`;
+  if (fxCache[cacheKey]) return fxCache[cacheKey];
+
+  const url = `${FRANKFURTER_BASE}/${isoDate}?from=${encodeURIComponent(currency)}&to=EUR`;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`Frankfurter API returned ${resp.status}`);
+  const data = await resp.json();
+  if (!data.rates || data.rates.EUR == null) throw new Error('No EUR rate in response');
+
+  // data.rates.EUR is "1 unit of `currency` = X EUR". Our engine wants
+  // "units of native currency per 1 EUR", i.e. the inverse.
+  const nativePerEur = 1 / data.rates.EUR;
+  const result = { rate: nativePerEur, actualDate: data.date };
+  fxCache[cacheKey] = result;
+  return result;
+}
+
+async function fetchAndApplyFxRate(fundId) {
+  const fund = state.funds.find(f => f.id === fundId);
+  if (!fund || fund.currency === 'EUR') return;
+  const currency = fund.currency === 'OTHER' ? (fund.customCurrency || '').toUpperCase() : fund.currency;
+  if (!currency || currency.length !== 3) {
+    showToast('Enter a valid 3-letter currency code first');
+    return;
+  }
+
+  const dec31 = `${state.taxYear}-12-31`;
+
+  const statusEl = document.querySelector(`[data-fx-status="${fundId}"]`);
+  if (statusEl) statusEl.textContent = 'Fetching rate…';
+
+  try {
+    const yearEnd = await fetchFxRate(currency, dec31);
+    fund.fxRateYearEnd = yearEnd.rate;
+    fund.fxRateDate = yearEnd.actualDate;
+    fund.fxRateSource = 'frankfurter';
+    renderFunds();
+    saveToLocalStorage();
+    const note = yearEnd.actualDate !== dec31
+      ? ` (${dec31} wasn't a trading day — using ${yearEnd.actualDate}, the nearest prior business day)`
+      : '';
+    showToast(`Rate fetched: 1 EUR = ${yearEnd.rate.toFixed(4)} ${currency}${note}`);
+  } catch (err) {
+    if (statusEl) statusEl.textContent = 'Could not fetch — enter rate manually below';
+    showToast(`Couldn't reach the exchange rate service. Enter the rate manually.`);
+  }
+}
+
+
 const addFundModal = document.getElementById('addFundModal');
 document.getElementById('addFundBtn').addEventListener('click', () => {
   document.getElementById('newFundName').value = '';
   document.getElementById('newFundIsin').value = '';
+  document.getElementById('newFundCurrency').value = 'INR';
+  document.getElementById('newFundCustomCurrency').value = '';
+  document.getElementById('customCurrencyField').style.display = 'none';
   addFundModal.classList.add('show');
   document.getElementById('newFundName').focus();
+});
+document.getElementById('newFundCurrency').addEventListener('change', (e) => {
+  document.getElementById('customCurrencyField').style.display = e.target.value === 'OTHER' ? 'block' : 'none';
 });
 document.getElementById('cancelAddFundBtn').addEventListener('click', () => addFundModal.classList.remove('show'));
 document.getElementById('confirmAddFundBtn').addEventListener('click', () => {
   const name = document.getElementById('newFundName').value.trim();
   if (!name) { showToast('Please enter a fund name'); return; }
+  const currencySelect = document.getElementById('newFundCurrency').value;
   const fund = {
     id: nextId('f'),
     name,
     isin: document.getElementById('newFundIsin').value.trim(),
-    currency: document.getElementById('newFundCurrency').value,
+    currency: currencySelect,
+    customCurrency: currencySelect === 'OTHER' ? document.getElementById('newFundCustomCurrency').value.trim().toUpperCase() : '',
     navStart: null,
     navEnd: null,
     distributionsPerUnit: 0,
     teilfreistellungApplies: false,
+    fxRateYearEnd: null,
+    fxRateDate: null,
+    fxRateSource: null,
     tranches: [{ id: nextId('t'), units: null, acquisitionMonth: null, label: 'Held since before ' + state.taxYear }],
   };
   state.funds.push(fund);
   addFundModal.classList.remove('show');
   renderFunds();
   saveToLocalStorage();
+  if (currencySelect !== 'OTHER') fetchAndApplyFxRate(fund.id);
 });
 
 // ---------- Fund + tranche CRUD ----------
@@ -149,7 +236,7 @@ function removeFund(fundId) {
 
 // ---------- Calculation ----------
 function computeFund(fund) {
-  if (fund.navStart == null || fund.navEnd == null || !state.fxRateYearEnd) return null;
+  if (fund.navStart == null || fund.navEnd == null || !fund.fxRateYearEnd) return null;
   const validTranches = fund.tranches.filter(t => t.units != null && t.units > 0);
   if (validTranches.length === 0) return null;
   return calculateVorabpauschale(
@@ -161,7 +248,7 @@ function computeFund(fund) {
       teilfreistellungApplies: fund.teilfreistellungApplies,
       tranches: validTranches.map(t => ({ units: t.units, acquisitionMonth: t.acquisitionMonth })),
     },
-    state.fxRateYearEnd
+    fund.fxRateYearEnd
   );
 }
 
@@ -189,27 +276,50 @@ function renderFunds() {
     card.className = 'card fund-card' + (result && result.isCapped ? ' lost-value' : '');
 
     const totalDisplay = result ? `€${result.totalEUR.toFixed(2)}` : '—';
+    const displayCurrency = fund.currency === 'OTHER' ? (fund.customCurrency || '???') : fund.currency;
+
+    const fxStatusText = fund.fxRateYearEnd
+      ? `1 EUR = ${fund.fxRateYearEnd.toFixed(4)} ${displayCurrency}${fund.fxRateSource === 'frankfurter' ? ` · rate dated ${fund.fxRateDate}${fund.fxRateDate !== `${state.taxYear}-12-31` ? ' (nearest trading day to 31 Dec)' : ''}` : ' · entered manually'}`
+      : 'No rate yet';
 
     card.innerHTML = `
       <div class="fund-header">
         <h3>${escapeHtml(fund.name)} ${fund.isin ? `<span class="pill">${escapeHtml(fund.isin)}</span>` : ''}</h3>
         <div class="fund-total">${totalDisplay}</div>
       </div>
-      <div class="fund-meta">${fund.currency}${result && result.isCapped ? ' &middot; <span class="pill warn">capped at Mehrbetrag</span>' : ''}</div>
+      <div class="fund-meta">${displayCurrency}${result && result.isCapped ? ' &middot; <span class="pill warn">capped at Mehrbetrag</span>' : ''}</div>
 
-      <div class="grid cols-4" style="margin-bottom:14px;">
+      <div class="grid cols-2" style="margin-bottom:14px; align-items:end;">
         <div class="field">
-          <label>NAV start of ${state.taxYear} (${fund.currency})</label>
+          <label>Exchange rate, 31 Dec ${state.taxYear} (auto-fetched, ECB via Frankfurter)</label>
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:13px; padding:9px 10px; border:1px solid var(--line); border-radius:4px; background:var(--paper);" data-fx-status="${fund.id}">${fxStatusText}</div>
+        </div>
+        <div class="btn-row">
+          <button class="btn small" data-action="fetchFx" data-fund="${fund.id}">${fund.fxRateYearEnd ? '↻ Re-fetch' : '⇩ Fetch rate'}</button>
+          <details style="font-size:12px;">
+            <summary style="cursor:pointer; padding:5px 8px; display:inline;">Enter manually</summary>
+            <div class="content" style="padding:8px 0 0;">
+              <input type="number" step="0.0001" placeholder="e.g. 93.0634" value="${fund.fxRateSource === 'manual' ? fund.fxRateYearEnd : ''}" data-fund="${fund.id}" data-field="fxRateManual" style="width:160px; display:inline-block;">
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="grid cols-3" style="margin-bottom:14px;">
+        <div class="field">
+          <label>NAV start of ${state.taxYear} (${displayCurrency})</label>
           <input type="number" step="0.0001" value="${fund.navStart ?? ''}" data-fund="${fund.id}" data-field="navStart">
         </div>
         <div class="field">
-          <label>NAV end of ${state.taxYear} (${fund.currency})</label>
+          <label>NAV end of ${state.taxYear} (${displayCurrency})</label>
           <input type="number" step="0.0001" value="${fund.navEnd ?? ''}" data-fund="${fund.id}" data-field="navEnd">
         </div>
         <div class="field">
-          <label>Distributions/unit (${fund.currency})</label>
+          <label>Distributions/unit (${displayCurrency})</label>
           <input type="number" step="0.0001" value="${fund.distributionsPerUnit ?? 0}" data-fund="${fund.id}" data-field="distributionsPerUnit">
         </div>
+      </div>
+      <div class="grid cols-2" style="margin-bottom:14px;">
         <div class="field">
           <label>Teilfreistellung 30%?</label>
           <select data-fund="${fund.id}" data-field="teilfreistellungApplies">
@@ -278,8 +388,24 @@ function attachFundEventListeners() {
     btn.addEventListener('click', () => removeTranche(btn.dataset.fund, btn.dataset.tranche)));
   document.querySelectorAll('[data-action="removeFund"]').forEach(btn =>
     btn.addEventListener('click', () => removeFund(btn.dataset.fund)));
+  document.querySelectorAll('[data-action="fetchFx"]').forEach(btn =>
+    btn.addEventListener('click', () => fetchAndApplyFxRate(btn.dataset.fund)));
 
-  document.querySelectorAll('input[data-fund][data-field]:not([data-tranche]), select[data-fund][data-field]:not([data-tranche])').forEach(input => {
+  document.querySelectorAll('[data-field="fxRateManual"]').forEach(input => {
+    input.addEventListener('input', () => {
+      const fund = state.funds.find(f => f.id === input.dataset.fund);
+      const val = parseFloat(input.value);
+      if (val && val > 0) {
+        fund.fxRateYearEnd = val;
+        fund.fxRateSource = 'manual';
+        fund.fxRateDate = null;
+        recalcAll();
+        saveToLocalStorage();
+      }
+    });
+  });
+
+  document.querySelectorAll('input[data-fund][data-field]:not([data-tranche]):not([data-field="fxRateManual"]), select[data-fund][data-field]:not([data-tranche])').forEach(input => {
     input.addEventListener('input', () => {
       const fund = state.funds.find(f => f.id === input.dataset.fund);
       const field = input.dataset.field;
@@ -380,16 +506,19 @@ document.getElementById('fileInput').addEventListener('change', (e) => {
       state = {
         taxYear: newYear,
         basiszins: BASISZINS_BY_YEAR[newYear] !== undefined ? BASISZINS_BY_YEAR[newYear] : imported.basiszins,
-        fxRateYearEnd: null,
         funds: imported.funds.map(f => ({
           id: f.id,
           name: f.name,
           isin: f.isin,
           currency: f.currency,
+          customCurrency: f.customCurrency || '',
           navStart: f.navEnd ?? null, // last year's year-end NAV becomes this year's start NAV
           navEnd: null,
           distributionsPerUnit: 0,
           teilfreistellungApplies: f.teilfreistellungApplies || false,
+          fxRateYearEnd: null,   // new year needs its own 31 Dec rate — never carry the old one forward
+          fxRateDate: null,
+          fxRateSource: null,
           tranches: [{
             id: nextId('t'),
             units: priorTotalUnitsByFund[f.id] || null,
@@ -400,10 +529,9 @@ document.getElementById('fileInput').addEventListener('change', (e) => {
       };
       populateTaxYearDropdown();
       document.getElementById('basiszins').value = (state.basiszins * 100).toFixed(4);
-      document.getElementById('fxRate').value = '';
       renderFunds();
       saveToLocalStorage();
-      showToast(`Loaded ${imported.funds.length} fund(s), rolled forward to ${state.taxYear}. Add this year's SIP tranches and enter year-end NAVs.`);
+      showToast(`Loaded ${imported.funds.length} fund(s), rolled forward to ${state.taxYear}. Fetch this year's FX rate, add SIP tranches, and enter year-end NAVs.`);
     } catch (err) {
       showToast('Could not read that file — is it a Vorabpauschale export?');
     }
@@ -444,5 +572,4 @@ function escapeHtml(str) {
 loadFromLocalStorage();
 populateTaxYearDropdown();
 document.getElementById('basiszins').value = (state.basiszins * 100).toFixed(4);
-if (state.fxRateYearEnd) document.getElementById('fxRate').value = state.fxRateYearEnd;
 renderFunds();

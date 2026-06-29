@@ -317,7 +317,7 @@
 
     <div class="card">
       <h2><span class="num">Y</span>Tax year settings</h2>
-      <div class="grid cols-3">
+      <div class="grid cols-2">
         <div class="field">
           <label for="taxYear">Calendar year (income accrues)</label>
           <select id="taxYear"></select>
@@ -327,10 +327,6 @@
           <label for="basiszins">Basiszins (%)</label>
           <input type="number" id="basiszins" step="0.0001" value="2.29">
           <div class="helptext">Auto-filled; verify against current BMF announcement</div>
-        </div>
-        <div class="field">
-          <label for="fxRate">FX rate on 31 Dec (native currency per 1 EUR)</label>
-          <input type="number" id="fxRate" step="0.0001" placeholder="e.g. 93.06 for INR">
         </div>
       </div>
     </div>
@@ -514,7 +510,7 @@
       <label for="newFundIsin">ISIN (optional)</label>
       <input type="text" id="newFundIsin" placeholder="e.g. INF179K01CR2">
     </div>
-    <div class="field" style="margin-bottom: 16px;">
+    <div class="field" style="margin-bottom: 12px;">
       <label for="newFundCurrency">Reporting currency</label>
       <select id="newFundCurrency">
         <option value="INR">INR — Indian Rupee</option>
@@ -522,8 +518,19 @@
         <option value="GBP">GBP — British Pound</option>
         <option value="CHF">CHF — Swiss Franc</option>
         <option value="JPY">JPY — Japanese Yen</option>
-        <option value="OTHER">Other</option>
+        <option value="CAD">CAD — Canadian Dollar</option>
+        <option value="AUD">AUD — Australian Dollar</option>
+        <option value="SGD">SGD — Singapore Dollar</option>
+        <option value="CNY">CNY — Chinese Yuan</option>
+        <option value="HKD">HKD — Hong Kong Dollar</option>
+        <option value="SEK">SEK — Swedish Krona</option>
+        <option value="NOK">NOK — Norwegian Krone</option>
+        <option value="OTHER">Other — enter ISO code</option>
       </select>
+    </div>
+    <div class="field" id="customCurrencyField" style="margin-bottom: 16px; display: none;">
+      <label for="newFundCustomCurrency">Currency code (ISO 4217, e.g. ZAR, BRL)</label>
+      <input type="text" id="newFundCustomCurrency" maxlength="3" placeholder="e.g. ZAR" style="text-transform: uppercase;">
     </div>
     <div class="btn-row">
       <button class="btn primary" id="confirmAddFundBtn">Add fund</button>
