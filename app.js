@@ -51,6 +51,15 @@ let state = {
   taxYear: new Date().getFullYear() - 1,
   basiszins: BASISZINS_BY_YEAR[new Date().getFullYear() - 1] || 0.0229,
   funds: [],
+  foreignIncome: {
+    nreInterest:       { amount: 0, tds: 0 },  // NRE FD — untaxed in India, fully taxable in DE
+    nroInterest:       { amount: 0, tds: 0 },  // NRO savings/FD — TDS creditable up to 10%
+    dividends:         { amount: 0, tds: 0 },  // Indian stock/MF dividends — TDS creditable up to 10%
+    stockGains:        { amount: 0, tds: 0 },  // Share/MF sale gains — §20 Abs.2
+    stockLosses:       { amount: 0 },           // Share/MF sale losses — only offsettable vs gains
+    otherInterest:     { amount: 0, tds: 0 },  // Other foreign interest
+    otherDividends:    { amount: 0, tds: 0 },  // Other foreign dividends
+  },
 };
 
 let idCounter = 1;
@@ -476,30 +485,142 @@ function attachFundEventListeners() {
   });
 }
 
+// ---------- Sparerpauschbetrag settings ----------
+const SPARER_LIMITS = { single: 1000, joint: 2000 };
+
+function getSparerRemaining() {
+  const filingType = document.getElementById('filingType')?.value || 'single';
+  const limit = SPARER_LIMITS[filingType];
+  const alreadyUsed = parseFloat(document.getElementById('sparerAlreadyUsed')?.value) || 0;
+  return Math.max(0, limit - alreadyUsed);
+}
+
+function updateSparerRemainingDisplay() {
+  const remaining = getSparerRemaining();
+  const el = document.getElementById('sparerRemaining');
+  if (el) el.textContent = `€${remaining.toFixed(2)}`;
+}
+
+// Wire up live updates when filing type or already-used changes
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('filingType')?.addEventListener('change', () => {
+    updateSparerRemainingDisplay();
+    renderSummary();
+  });
+  document.getElementById('sparerAlreadyUsed')?.addEventListener('input', () => {
+    updateSparerRemainingDisplay();
+    renderSummary();
+  });
+  // Foreign income fields — all use data-fi-category and data-fi-field attributes
+  document.querySelectorAll('[data-fi-category][data-fi-field]').forEach(input => {
+    input.addEventListener('input', () => {
+      const cat = input.dataset.fiCategory;
+      const field = input.dataset.fiField;
+      if (!state.foreignIncome[cat]) return;
+      state.foreignIncome[cat][field] = parseFloat(input.value) || 0;
+      renderSummary();
+      saveToLocalStorage();
+    });
+  });
+});
+
+// ---------- Foreign income totals ----------
+function getForeignIncomeTotals() {
+  const fi = state.foreignIncome;
+
+  // Net stock result: gains minus losses, floored at 0 for Sparer purposes
+  // (losses can only offset gains from the same §20 Abs.2 category, not interest/dividends)
+  const stockNet = Math.max(0, (fi.stockGains.amount || 0) - (fi.stockLosses.amount || 0));
+
+  // Total foreign Kapitalerträge that count against Sparerpauschbetrag
+  const totalForeignIncome =
+    (fi.nreInterest.amount || 0) +
+    (fi.nroInterest.amount || 0) +
+    (fi.dividends.amount || 0) +
+    stockNet +
+    (fi.otherInterest.amount || 0) +
+    (fi.otherDividends.amount || 0);
+
+  // Total creditable foreign tax (TDS), capped per DBA at 10% of the gross amount per category
+  // NRE has no TDS so no credit. Stock gains TDS treatment is more complex; we note this.
+  const totalCreditable =
+    Math.min(fi.nroInterest.tds || 0,    (fi.nroInterest.amount || 0)    * 0.10) +
+    Math.min(fi.dividends.tds || 0,      (fi.dividends.amount || 0)      * 0.10) +
+    Math.min(fi.stockGains.tds || 0,     (fi.stockGains.amount || 0)     * 0.10) +
+    Math.min(fi.otherInterest.tds || 0,  (fi.otherInterest.amount || 0)  * 0.10) +
+    Math.min(fi.otherDividends.tds || 0, (fi.otherDividends.amount || 0) * 0.10);
+
+  return { totalForeignIncome, stockNet, totalCreditable };
+}
+
 // ---------- Summary view ----------
 function renderSummary() {
   const tbody = document.querySelector('#summaryTable tbody');
-  tbody.innerHTML = '';
+  if (tbody) tbody.innerHTML = '';
+
   let grandTotalEUR = 0;
   let grandTotalTaxable = 0;
+  let grandTeilfreistellungReduction = 0;
 
   state.funds.forEach(fund => {
     const result = computeFund(fund);
     if (!result) return;
+
+    const teilfreiReduction = result.totalEUR - result.taxableEUR;
     grandTotalEUR += result.totalEUR;
     grandTotalTaxable += result.taxableEUR;
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>${escapeHtml(fund.name)}</td>
-      <td class="num mono">${result.totalNativeCurrency.toFixed(2)} ${fund.currency}</td>
-      <td class="num mono">€${result.totalEUR.toFixed(2)}</td>
-      <td class="num mono">€${result.taxableEUR.toFixed(2)}</td>
-    `;
-    tbody.appendChild(tr);
+    grandTeilfreistellungReduction += teilfreiReduction;
+
+    if (tbody) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${escapeHtml(fund.name)}</td>
+        <td class="num mono">${result.totalNativeCurrency.toFixed(2)} ${fund.currency === 'OTHER' ? (fund.customCurrency || '?') : fund.currency}</td>
+        <td class="num mono">€${result.totalEUR.toFixed(2)}</td>
+        <td class="num mono">${result.teilfreistellungApplies ? `−€${teilfreiReduction.toFixed(2)} (30%)` : '—'}</td>
+        <td class="num mono">€${result.taxableEUR.toFixed(2)}</td>
+      `;
+      tbody.appendChild(tr);
+    }
   });
 
-  document.getElementById('grandTotalEUR').textContent = `€${grandTotalEUR.toFixed(2)}`;
-  document.getElementById('grandTotalTaxable').textContent = `€${grandTotalTaxable.toFixed(2)}`;
+  // Add other foreign income to the total taxable pool
+  const { totalForeignIncome, stockNet, totalCreditable } = getForeignIncomeTotals();
+  const totalAllTaxable = grandTotalTaxable + totalForeignIncome;
+
+  // Sparerpauschbetrag: offset across ALL capital income, Vorabpauschale first then others
+  const sparerRemaining = getSparerRemaining();
+  const sparerOffset = Math.min(sparerRemaining, totalAllTaxable);
+  const taxableExcess = Math.max(0, totalAllTaxable - sparerRemaining);
+  const kest = taxableExcess * 0.25;
+  const soli = kest * 0.055;
+  const totalTaxBeforeCredit = kest + soli;
+  const totalTax = Math.max(0, totalTaxBeforeCredit - totalCreditable);
+
+  // Update summary bar
+  const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+  set('grandTotalEUR', `€${grandTotalEUR.toFixed(2)}`);
+  set('grandTotalTaxable', `€${totalAllTaxable.toFixed(2)}`);
+  set('taxableExcess', `€${taxableExcess.toFixed(2)}`);
+  set('estimatedTax', `€${totalTax.toFixed(2)}`);
+  updateSparerRemainingDisplay();
+
+  // Update step-by-step table
+  set('calc-gross', `€${grandTotalEUR.toFixed(2)}`);
+  set('calc-teilfrei', `−€${grandTeilfreistellungReduction.toFixed(2)}`);
+  set('calc-taxable-vp', `€${grandTotalTaxable.toFixed(2)}`);
+  set('calc-foreign-income', `€${totalForeignIncome.toFixed(2)}`);
+  set('calc-total-all', `€${totalAllTaxable.toFixed(2)}`);
+  set('calc-sparer', `−€${sparerOffset.toFixed(2)}`);
+  set('calc-excess', `€${taxableExcess.toFixed(2)}`);
+  set('calc-kest', `€${kest.toFixed(2)}`);
+  set('calc-soli', `€${soli.toFixed(2)}`);
+  set('calc-creditable', `−€${totalCreditable.toFixed(2)}`);
+  set('calc-total-tax', `€${totalTax.toFixed(2)}`);
+
+  // Colour the excess row
+  const excessRow = document.querySelector('#taxCalcTable tr[data-row="excess"]');
+  if (excessRow) excessRow.style.color = taxableExcess > 0 ? 'var(--danger)' : 'var(--mono)';
 }
 
 // ---------- JSON export / import ----------

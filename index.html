@@ -195,12 +195,23 @@
   .fund-meta { font-size: 12.5px; color: var(--muted); margin-bottom: 14px; }
 
   .summary-bar {
-    display: flex; justify-content: space-between; align-items: center;
-    padding: 18px 24px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0;
     background: var(--ink);
     color: var(--paper-raised);
     border-radius: var(--radius);
     margin-bottom: 22px;
+    overflow: hidden;
+  }
+  .summary-bar > div {
+    padding: 18px 20px;
+    border-right: 1px solid rgba(255,255,255,0.1);
+  }
+  .summary-bar > div:last-child { border-right: none; }
+  @media (max-width: 760px) {
+    .summary-bar { grid-template-columns: 1fr 1fr; }
+    .summary-bar > div:nth-child(2) { border-right: none; }
   }
   .summary-bar .label { font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; opacity: 0.7; }
   .summary-bar .value { font-family: 'IBM Plex Mono', monospace; font-size: 28px; font-weight: 600; }
@@ -343,22 +354,157 @@
   <!-- ============ SUMMARY VIEW ============ -->
   <section class="view" id="view-summary">
 
+    <div class="card">
+      <h2><span class="num">§</span>Sparerpauschbetrag settings</h2>
+      <p style="font-size:13.5px; color:var(--muted); margin-top:0;">
+        Enter how much of your saver's allowance is still available after your German banks have
+        already consumed their share via Freistellungsaufträge. The Vorabpauschale from this tool
+        is then offset against this remaining allowance; only the excess is taxable.
+      </p>
+      <div class="grid cols-3">
+        <div class="field">
+          <label>Filing type</label>
+          <select id="filingType">
+            <option value="single">Individual (Einzelveranlagung) — €1,000</option>
+            <option value="joint">Joint (Zusammenveranlagung) — €2,000</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Already used by German banks (Freistellungsauftrag)</label>
+          <input type="number" id="sparerAlreadyUsed" min="0" step="0.01" value="0" placeholder="e.g. 375.09">
+          <div class="helptext">Sum of Sparer-Pauschbetrag shown on all your Jahressteuerbescheinigungen</div>
+        </div>
+        <div class="field">
+          <label>Remaining Sparerpauschbetrag available</label>
+          <div id="sparerRemaining" style="font-family:'IBM Plex Mono',monospace; font-size:18px; font-weight:600; padding:9px 0; color:var(--mono);">€1,000.00</div>
+        </div>
+      </div>
+    </div>
+
     <div class="summary-bar">
       <div>
-        <div class="label">Total Vorabpauschale, this calendar year</div>
+        <div class="label">Total VP (gross, to declare)</div>
         <div class="value" id="grandTotalEUR">€0.00</div>
       </div>
       <div>
-        <div class="label">Taxable after Teilfreistellung</div>
+        <div class="label">After Teilfreistellung</div>
         <div class="value" id="grandTotalTaxable">€0.00</div>
       </div>
+      <div>
+        <div class="label">Taxable excess</div>
+        <div class="value" id="taxableExcess">€0.00</div>
+      </div>
+      <div>
+        <div class="label">Est. tax due (26.375%)</div>
+        <div class="value" id="estimatedTax">€0.00</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="num">₹</span>Other foreign capital income (self-declared)</h2>
+      <p style="font-size:13.5px; color:var(--muted); margin-top:0;">
+        Enter amounts in EUR. All of these reduce your Sparerpauschbetrag. TDS paid in India
+        is creditable against German tax, subject to the DBA India-Germany treaty cap
+        (generally 10% of gross per category).
+      </p>
+      <table style="font-size:13px;">
+        <thead>
+          <tr>
+            <th>Income type</th>
+            <th class="num">Amount (€)</th>
+            <th class="num">TDS paid (€)</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>NRE FD interest</td>
+            <td class="num"><input type="number" min="0" step="0.01" placeholder="0.00" data-fi-category="nreInterest" data-fi-field="amount" style="width:110px;text-align:right;font-family:monospace;"></td>
+            <td class="num" style="color:var(--muted);font-size:12px;">—</td>
+            <td style="font-size:12px;color:var(--muted);">No TDS in India; fully taxable in Germany (DBA Art. 11 — residence state taxes)</td>
+          </tr>
+          <tr>
+            <td>NRO savings / FD interest</td>
+            <td class="num"><input type="number" min="0" step="0.01" placeholder="0.00" data-fi-category="nroInterest" data-fi-field="amount" style="width:110px;text-align:right;font-family:monospace;"></td>
+            <td class="num"><input type="number" min="0" step="0.01" placeholder="0.00" data-fi-category="nroInterest" data-fi-field="tds" style="width:110px;text-align:right;font-family:monospace;"></td>
+            <td style="font-size:12px;color:var(--muted);">TDS creditable up to 10% of gross (DBA Art. 11)</td>
+          </tr>
+          <tr>
+            <td>Dividends (Indian stocks / MFs)</td>
+            <td class="num"><input type="number" min="0" step="0.01" placeholder="0.00" data-fi-category="dividends" data-fi-field="amount" style="width:110px;text-align:right;font-family:monospace;"></td>
+            <td class="num"><input type="number" min="0" step="0.01" placeholder="0.00" data-fi-category="dividends" data-fi-field="tds" style="width:110px;text-align:right;font-family:monospace;"></td>
+            <td style="font-size:12px;color:var(--muted);">TDS creditable up to 10% of gross (DBA Art. 10)</td>
+          </tr>
+          <tr>
+            <td>Stock / MF sale gains (§20 Abs. 2)</td>
+            <td class="num"><input type="number" min="0" step="0.01" placeholder="0.00" data-fi-category="stockGains" data-fi-field="amount" style="width:110px;text-align:right;font-family:monospace;"></td>
+            <td class="num"><input type="number" min="0" step="0.01" placeholder="0.00" data-fi-category="stockGains" data-fi-field="tds" style="width:110px;text-align:right;font-family:monospace;"></td>
+            <td style="font-size:12px;color:var(--muted);">Enter gross gains; losses entered separately below</td>
+          </tr>
+          <tr>
+            <td>Stock / MF sale losses (§20 Abs. 2)</td>
+            <td class="num"><input type="number" min="0" step="0.01" placeholder="0.00" data-fi-category="stockLosses" data-fi-field="amount" style="width:110px;text-align:right;font-family:monospace;"></td>
+            <td class="num" style="color:var(--muted);font-size:12px;">—</td>
+            <td style="font-size:12px;color:var(--muted);">Only offsettable against gains above — not against interest/Vorabpauschale (§20 Abs. 6 Satz 4)</td>
+          </tr>
+          <tr>
+            <td>Other foreign interest</td>
+            <td class="num"><input type="number" min="0" step="0.01" placeholder="0.00" data-fi-category="otherInterest" data-fi-field="amount" style="width:110px;text-align:right;font-family:monospace;"></td>
+            <td class="num"><input type="number" min="0" step="0.01" placeholder="0.00" data-fi-category="otherInterest" data-fi-field="tds" style="width:110px;text-align:right;font-family:monospace;"></td>
+            <td style="font-size:12px;color:var(--muted);">e.g. bonds, foreign savings; treaty cap varies by country</td>
+          </tr>
+          <tr>
+            <td>Other foreign dividends</td>
+            <td class="num"><input type="number" min="0" step="0.01" placeholder="0.00" data-fi-category="otherDividends" data-fi-field="amount" style="width:110px;text-align:right;font-family:monospace;"></td>
+            <td class="num"><input type="number" min="0" step="0.01" placeholder="0.00" data-fi-category="otherDividends" data-fi-field="tds" style="width:110px;text-align:right;font-family:monospace;"></td>
+            <td style="font-size:12px;color:var(--muted);">e.g. foreign equities; treaty cap varies</td>
+          </tr>
+        </tbody>
+      </table>
+      <p style="font-size:12px;color:var(--muted);margin-top:10px;margin-bottom:0;">
+        ⚠ If India withheld more TDS than the treaty cap (e.g. 30% on NRO vs 10% treaty cap),
+        only the capped amount is creditable in Germany. Reclaim the excess in India.
+        Stock sale TDS treatment can be complex; consult a Steuerberater.
+      </p>
+    </div>
+
+    <div class="card">
+      <h2><span class="num">∑</span>Step-by-step tax calculation</h2>
+      <table class="mono-table" id="taxCalcTable">
+        <tbody>
+          <tr><td>Vorabpauschale (all funds, gross)</td><td class="num" id="calc-gross">€0.00</td></tr>
+          <tr><td style="padding-left:16px;color:var(--muted);">Less: Teilfreistellung (30%, where applicable)</td><td class="num" id="calc-teilfrei" style="color:var(--muted);">−€0.00</td></tr>
+          <tr><td>Taxable Vorabpauschale</td><td class="num" id="calc-taxable-vp">€0.00</td></tr>
+          <tr><td>Other foreign capital income (net of stock losses)</td><td class="num" id="calc-foreign-income">€0.00</td></tr>
+          <tr style="font-weight:600;"><td>Total taxable capital income</td><td class="num" id="calc-total-all">€0.00</td></tr>
+          <tr><td style="padding-left:16px;color:var(--muted);">Less: remaining Sparerpauschbetrag</td><td class="num" id="calc-sparer" style="color:var(--muted);">−€0.00</td></tr>
+          <tr style="font-weight:700;border-top:2px solid var(--ink);" data-row="excess"><td>Taxable excess (subject to 26.375%)</td><td class="num" id="calc-excess">€0.00</td></tr>
+          <tr><td style="padding-left:16px;color:var(--muted);font-size:12.5px;">25% Abgeltungsteuer</td><td class="num" id="calc-kest" style="color:var(--muted);font-size:12.5px;">€0.00</td></tr>
+          <tr><td style="padding-left:16px;color:var(--muted);font-size:12.5px;">5.5% Solidaritätszuschlag</td><td class="num" id="calc-soli" style="color:var(--muted);font-size:12.5px;">€0.00</td></tr>
+          <tr><td style="padding-left:16px;color:var(--muted);font-size:12.5px;">Less: creditable foreign TDS (DBA-capped)</td><td class="num" id="calc-creditable" style="color:var(--muted);font-size:12.5px;">−€0.00</td></tr>
+          <tr style="font-weight:700;border-top:1px solid var(--line);"><td>Estimated net tax due</td><td class="num" id="calc-total-tax">€0.00</td></tr>
+        </tbody>
+      </table>
+      <p style="font-size:12px;color:var(--muted);margin-top:12px;margin-bottom:0;">
+        ⚠ Planning estimate only. Actual assessment may differ if Kirchensteuer applies,
+        Günstigerprüfung is more favourable, or prior-year loss carryforwards apply.
+        Declare gross Vorabpauschale in Anlage KAP Line 19 (or KAP-INV). Other foreign
+        income: NRO/NRE interest → KAP Line 19; dividends → KAP Line 15;
+        stock gains/losses → KAP Lines 20–23; foreign TDS → KAP Lines 41–42.
+      </p>
     </div>
 
     <div class="card">
       <h2><span class="num">↓</span>Per-fund breakdown</h2>
       <table id="summaryTable">
         <thead>
-          <tr><th>Fund</th><th class="num">Native total</th><th class="num">EUR total</th><th class="num">Taxable EUR</th></tr>
+          <tr>
+            <th>Fund</th>
+            <th class="num">Native total</th>
+            <th class="num">Gross VP (EUR)</th>
+            <th class="num">Teilfreistellung</th>
+            <th class="num">Taxable VP</th>
+          </tr>
         </thead>
         <tbody></tbody>
       </table>
