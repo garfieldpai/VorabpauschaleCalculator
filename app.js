@@ -183,6 +183,135 @@ async function fetchAndApplyFxRate(fundId) {
   }
 }
 
+// ---------- Indian MF NAV fetching (mfapi.in — free, CORS-enabled, AMFI-sourced) ----------
+//
+// Flow:
+//   1. Search for scheme code matching the fund's ISIN via the search endpoint
+//      GET https://api.mfapi.in/mf/search?q={isin}
+//   2. Fetch full NAV history for that scheme_code
+//      GET https://api.mfapi.in/mf/{scheme_code}
+//      Returns {meta, data:[{date:"31-Dec-2024", nav:"203.7350"},...], status}
+//   3. Find NAVs for:
+//      - "Start of year" = last published NAV on or before 31 Dec of (taxYear-1)
+//        Jan 1 is never a trading day in India (public holiday), so we always
+//        look for the nearest prior date to Jan 1 of the selected year.
+//      - "End of year" = last published NAV on or before 31 Dec of taxYear.
+//   4. Auto-fill navStart, navEnd, record actual dates used.
+//
+// mfapi.in NAV history is sorted newest-first. We cache per scheme_code so
+// re-renders don't re-fetch.
+
+const MFAPI_BASE = 'https://api.mfapi.in/mf';
+const navApiCache = {}; // scheme_code → { meta, navHistory: [{isoDate, nav}] }
+
+async function findSchemeCodeByIsin(isin) {
+  const resp = await fetch(`${MFAPI_BASE}/search?q=${encodeURIComponent(isin)}`);
+  if (!resp.ok) throw new Error(`Search API returned ${resp.status}`);
+  const results = await resp.json();
+  if (!Array.isArray(results) || results.length === 0) {
+    throw new Error(`No scheme found for ISIN ${isin}. Verify the ISIN or enter NAV manually.`);
+  }
+  // Return the first match — ISIN is unique so there should only be one
+  return results[0].schemeCode;
+}
+
+async function fetchNavHistory(schemeCode) {
+  if (navApiCache[schemeCode]) return navApiCache[schemeCode];
+  const resp = await fetch(`${MFAPI_BASE}/${schemeCode}`);
+  if (!resp.ok) throw new Error(`mfapi.in returned ${resp.status} for scheme ${schemeCode}`);
+  const data = await resp.json();
+  if (data.status !== 'SUCCESS' || !data.data?.length) {
+    throw new Error(`No NAV data for scheme ${schemeCode}`);
+  }
+  // Normalise dates from "31-Dec-2024" to ISO "2024-12-31" for easy comparison
+  const MONTHS = {Jan:'01',Feb:'02',Mar:'03',Apr:'04',May:'05',Jun:'06',
+                  Jul:'07',Aug:'08',Sep:'09',Oct:'10',Nov:'11',Dec:'12'};
+  const navHistory = data.data.map(row => {
+    const [dd, mmm, yyyy] = row.date.split('-');
+    const isoDate = `${yyyy}-${MONTHS[mmm] || mmm.padStart(2,'0')}-${dd.padStart(2,'0')}`;
+    return { isoDate, nav: parseFloat(row.nav) };
+  });
+  // data is newest-first; keep that order for findNavOnOrBefore
+  const result = { meta: data.meta, navHistory };
+  navApiCache[schemeCode] = result;
+  return result;
+}
+
+function findNavOnOrBefore(history, isoDate) {
+  // history is sorted newest-first — first entry where isoDate <= target
+  for (const entry of history) {
+    if (entry.isoDate <= isoDate) return entry;
+  }
+  return null;
+}
+
+async function fetchAndApplyNavs(fundId) {
+  const fund = state.funds.find(f => f.id === fundId);
+  if (!fund) return;
+  if (!fund.isin || fund.isin.trim().length < 10) {
+    showToast('Enter the fund ISIN first (e.g. INF179K01CR2)');
+    return;
+  }
+
+  const statusEl = document.querySelector(`[data-nav-status="${fundId}"]`);
+  const btnEl = document.querySelector(`[data-action="fetchNavs"][data-fund="${fundId}"]`);
+  const setStatus = msg => { if (statusEl) statusEl.textContent = msg; };
+  const setBtnText = txt => { if (btnEl) btnEl.textContent = txt; };
+
+  setStatus('Searching AMFI for ISIN…');
+  setBtnText('⏳ Fetching…');
+
+  try {
+    // Step 1: ISIN → scheme code
+    const schemeCode = await findSchemeCodeByIsin(fund.isin.trim());
+    setStatus(`Found scheme ${schemeCode} — loading NAV history…`);
+
+    // Step 2: full NAV history
+    const { meta, navHistory } = await fetchNavHistory(schemeCode);
+
+    // Step 3: start-of-year NAV = last trading day of (taxYear - 1)
+    // Jan 1 is always a public holiday in India so we search for <= Dec 31 of prior year
+    const startTarget = `${state.taxYear - 1}-12-31`;
+    const endTarget   = `${state.taxYear}-12-31`;
+
+    const startEntry = findNavOnOrBefore(navHistory, startTarget);
+    const endEntry   = findNavOnOrBefore(navHistory, endTarget);
+
+    if (!startEntry) throw new Error(
+      `No NAV found on or before ${startTarget}. Did this fund exist in ${state.taxYear - 1}?`);
+    if (!endEntry) throw new Error(
+      `No NAV found on or before ${endTarget}. Is the ${state.taxYear} year-end data available?`);
+
+    // Step 4: apply
+    fund.navStart      = startEntry.nav;
+    fund.navEnd        = endEntry.nav;
+    fund.navStartDate  = startEntry.isoDate;
+    fund.navEndDate    = endEntry.isoDate;
+    fund.navSource     = 'mfapi';
+    fund.navSchemeCode = schemeCode;
+    fund.navSchemeName = meta?.scheme_name || '';
+
+    renderFunds();
+    saveToLocalStorage();
+
+    const startNote = startEntry.isoDate !== startTarget
+      ? ` (nearest prior trading day to 1 Jan ${state.taxYear})` : '';
+    const endNote = endEntry.isoDate !== endTarget
+      ? ` (nearest prior trading day to 31 Dec ${state.taxYear})` : '';
+
+    showToast(`NAVs fetched: start ${startEntry.nav}${startNote} / end ${endEntry.nav}${endNote}`);
+
+    // Also auto-trigger FX fetch for INR funds if not yet done
+    if (!fund.fxRateYearEnd && fund.currency === 'INR') {
+      fetchAndApplyFxRate(fundId);
+    }
+
+  } catch (err) {
+    setStatus(`Could not fetch: ${err.message}`);
+    setBtnText('⇩ Fetch NAVs');
+    showToast(`NAV fetch failed: ${err.message}`);
+  }
+}
 
 const addFundModal = document.getElementById('addFundModal');
 document.getElementById('addFundBtn').addEventListener('click', () => {
@@ -208,13 +337,12 @@ document.getElementById('confirmAddFundBtn').addEventListener('click', () => {
     isin: document.getElementById('newFundIsin').value.trim(),
     currency: currencySelect,
     customCurrency: currencySelect === 'OTHER' ? document.getElementById('newFundCustomCurrency').value.trim().toUpperCase() : '',
-    navStart: null,
-    navEnd: null,
+    navStart: null, navEnd: null,
+    navStartDate: null, navEndDate: null,
+    navSource: null, navSchemeCode: null, navSchemeName: '',
     distributionsPerUnit: 0,
     teilfreistellungApplies: false,
-    fxRateYearEnd: null,
-    fxRateDate: null,
-    fxRateSource: null,
+    fxRateYearEnd: null, fxRateDate: null, fxRateSource: null,
     tranches: [{ id: nextId('t'), units: null, acquisitionMonth: null, label: 'Held since before ' + state.taxYear }],
   };
   state.funds.push(fund);
@@ -339,7 +467,7 @@ function renderFunds() {
           <div style="font-family:'IBM Plex Mono',monospace; font-size:13px; padding:9px 10px; border:1px solid var(--line); border-radius:4px; background:var(--paper);" data-fx-status="${fund.id}">${fxStatusText}</div>
         </div>
         <div class="btn-row">
-          <button class="btn small" data-action="fetchFx" data-fund="${fund.id}">${fund.fxRateYearEnd ? '↻ Re-fetch' : '⇩ Fetch rate'}</button>
+          <button class="btn small" data-action="fetchFx" data-fund="${fund.id}">${fund.fxRateYearEnd ? '↻ Re-fetch FX' : '⇩ Fetch FX rate'}</button>
           <details style="font-size:12px;">
             <summary style="cursor:pointer; padding:5px 8px; display:inline;">Enter manually</summary>
             <div class="content" style="padding:8px 0 0;">
@@ -349,14 +477,34 @@ function renderFunds() {
         </div>
       </div>
 
+      ${fund.currency === 'INR' ? `
+      <div class="grid cols-2" style="margin-bottom:14px; align-items:end; background:var(--mono-soft); border-radius:var(--radius); padding:12px 14px;">
+        <div class="field">
+          <label style="color:var(--mono);">Auto-fetch NAVs from AMFI via mfapi.in (Indian MFs only)</label>
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:12.5px; padding:8px 10px; border:1px solid #b8d4c4; border-radius:4px; background:#fff;" data-nav-status="${fund.id}">
+            ${fund.navSource === 'mfapi'
+              ? `${fund.navSchemeName || 'Scheme ' + fund.navSchemeCode} · start: ${fund.navStart} (${fund.navStartDate}) · end: ${fund.navEnd} (${fund.navEndDate})`
+              : fund.isin ? 'Click "Fetch NAVs" to auto-populate from AMFI data' : 'Enter ISIN above to enable auto-fetch'}
+          </div>
+        </div>
+        <div class="btn-row">
+          <button class="btn small" data-action="fetchNavs" data-fund="${fund.id}" ${!fund.isin ? 'disabled' : ''}>
+            ${fund.navSource === 'mfapi' ? '↻ Re-fetch NAVs' : '⇩ Fetch NAVs'}
+          </button>
+          <span style="font-size:11.5px; color:var(--mono); font-family:monospace;">Free · AMFI-sourced · no key</span>
+        </div>
+      </div>` : ''}
+
       <div class="grid cols-3" style="margin-bottom:14px;">
         <div class="field">
-          <label>NAV start of ${state.taxYear} (${displayCurrency})</label>
+          <label>NAV start of ${state.taxYear} — ${state.taxYear - 1} year-end (${displayCurrency})</label>
           <input type="number" step="0.0001" value="${fund.navStart ?? ''}" data-fund="${fund.id}" data-field="navStart">
+          ${fund.navStartDate ? `<div class="helptext">Actual date: ${fund.navStartDate}${fund.navStartDate !== `${state.taxYear-1}-12-31` ? ' ← nearest prior trading day' : ''}</div>` : ''}
         </div>
         <div class="field">
-          <label>NAV end of ${state.taxYear} (${displayCurrency})</label>
+          <label>NAV end of ${state.taxYear} — Dec 31 (${displayCurrency})</label>
           <input type="number" step="0.0001" value="${fund.navEnd ?? ''}" data-fund="${fund.id}" data-field="navEnd">
+          ${fund.navEndDate ? `<div class="helptext">Actual date: ${fund.navEndDate}${fund.navEndDate !== `${state.taxYear}-12-31` ? ' ← nearest prior trading day' : ''}</div>` : ''}
         </div>
         <div class="field">
           <label>Distributions/unit (${displayCurrency})</label>
@@ -434,6 +582,8 @@ function attachFundEventListeners() {
     btn.addEventListener('click', () => removeFund(btn.dataset.fund)));
   document.querySelectorAll('[data-action="fetchFx"]').forEach(btn =>
     btn.addEventListener('click', () => fetchAndApplyFxRate(btn.dataset.fund)));
+  document.querySelectorAll('[data-action="fetchNavs"]').forEach(btn =>
+    btn.addEventListener('click', () => fetchAndApplyNavs(btn.dataset.fund)));
 
   document.querySelectorAll('[data-field="fxRateManual"]').forEach(input => {
     input.addEventListener('input', () => {
@@ -663,18 +813,18 @@ document.getElementById('fileInput').addEventListener('change', (e) => {
         taxYear: newYear,
         basiszins: BASISZINS_BY_YEAR[newYear] !== undefined ? BASISZINS_BY_YEAR[newYear] : imported.basiszins,
         funds: imported.funds.map(f => ({
-          id: f.id,
-          name: f.name,
-          isin: f.isin,
-          currency: f.currency,
-          customCurrency: f.customCurrency || '',
-          navStart: f.navEnd ?? null, // last year's year-end NAV becomes this year's start NAV
+          id: f.id, name: f.name, isin: f.isin,
+          currency: f.currency, customCurrency: f.customCurrency || '',
+          navStart: f.navEnd ?? null,   // prior year-end → this year's start
           navEnd: null,
+          navStartDate: f.navEndDate ?? null,
+          navEndDate: null,
+          navSource: f.navEnd ? 'rolled-forward' : null,
+          navSchemeCode: f.navSchemeCode ?? null,  // carry forward for re-fetch
+          navSchemeName: f.navSchemeName ?? '',
           distributionsPerUnit: 0,
           teilfreistellungApplies: f.teilfreistellungApplies || false,
-          fxRateYearEnd: null,   // new year needs its own 31 Dec rate — never carry the old one forward
-          fxRateDate: null,
-          fxRateSource: null,
+          fxRateYearEnd: null, fxRateDate: null, fxRateSource: null,
           tranches: [{
             id: nextId('t'),
             units: priorTotalUnitsByFund[f.id] || null,
