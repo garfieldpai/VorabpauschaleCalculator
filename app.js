@@ -202,38 +202,92 @@ async function fetchAndApplyFxRate(fundId) {
 // re-renders don't re-fetch.
 
 const MFAPI_BASE = 'https://api.mfapi.in/mf';
+const CAPTNEMO_BASE = 'https://mf.captnemo.in';
 const navApiCache = {}; // scheme_code → { meta, navHistory: [{isoDate, nav}] }
+const isinSchemeCodeCache = {}; // isin → schemeCode
 
 async function findSchemeCodeByIsin(isin) {
-  const resp = await fetch(`${MFAPI_BASE}/search?q=${encodeURIComponent(isin)}`);
-  if (!resp.ok) throw new Error(`Search API returned ${resp.status}`);
-  const results = await resp.json();
-  if (!Array.isArray(results) || results.length === 0) {
-    throw new Error(`No scheme found for ISIN ${isin}. Verify the ISIN or enter NAV manually.`);
+  if (isinSchemeCodeCache[isin]) return isinSchemeCodeCache[isin];
+
+  // Strategy 1: captnemo.in accepts ISIN directly and returns the full NAV history
+  // in one shot — we can extract the scheme code from the meta, OR just use
+  // captnemo's own data structure directly (it returns historical_nav as [[date,nav],...])
+  // We try captnemo first since it's ISIN-native.
+  try {
+    const resp = await fetch(`${CAPTNEMO_BASE}/nav/${isin}`);
+    if (resp.ok) {
+      const data = await resp.json();
+      // captnemo returns { ISIN, name, nav, date, historical_nav: [["YYYY-MM-DD", nav],...] }
+      if (data && data.historical_nav?.length) {
+        // Cache the full history directly to avoid a second mfapi.in call
+        const navHistory = data.historical_nav
+          .map(([isoDate, nav]) => ({ isoDate, nav: parseFloat(nav) }))
+          .sort((a, b) => b.isoDate.localeCompare(a.isoDate)); // newest first
+        navApiCache[`isin_${isin}`] = { meta: { scheme_name: data.name }, navHistory };
+        isinSchemeCodeCache[isin] = `isin_${isin}`; // use ISIN as a pseudo scheme code key
+        return `isin_${isin}`;
+      }
+    }
+  } catch (e) { /* fall through to mfapi */ }
+
+  // Strategy 2: mfapi.in full scheme list — download all ~14k schemes and find ISIN match
+  // This is large (~2MB) but cached after first fetch
+  try {
+    const resp = await fetch(MFAPI_BASE);
+    if (!resp.ok) throw new Error(`mfapi.in list returned ${resp.status}`);
+    const allSchemes = await resp.json(); // [{schemeCode, schemeName}]
+
+    // allSchemes doesn't include ISINs — we need to fetch each scheme's meta to check ISIN.
+    // That's 14k requests which is impractical. Instead, use the search endpoint with
+    // keywords from the ISIN (last 6 chars are often scheme-specific) to narrow it down.
+    // Better: fetch the AMFI full NAV text file which DOES include ISINs in one request.
+    const amfiResp = await fetch('https://www.amfiindia.com/spages/NAVAll.txt');
+    if (!amfiResp.ok) throw new Error('AMFI NAV file unavailable');
+    const text = await amfiResp.text();
+
+    // Format: SchemeCode;ISINGrowth;ISINDivReinvest;SchemeName;NAV;Date
+    const lines = text.split('\n');
+    for (const line of lines) {
+      const parts = line.split(';');
+      if (parts.length >= 3 && (parts[1].trim() === isin || parts[2].trim() === isin)) {
+        const schemeCode = parseInt(parts[0].trim(), 10);
+        if (!isNaN(schemeCode)) {
+          isinSchemeCodeCache[isin] = schemeCode;
+          return schemeCode;
+        }
+      }
+    }
+    throw new Error(`ISIN ${isin} not found in AMFI data. Verify the ISIN is correct.`);
+  } catch (e) {
+    throw new Error(`Could not find scheme for ISIN ${isin}: ${e.message}`);
   }
-  // Return the first match — ISIN is unique so there should only be one
-  return results[0].schemeCode;
 }
 
-async function fetchNavHistory(schemeCode) {
-  if (navApiCache[schemeCode]) return navApiCache[schemeCode];
-  const resp = await fetch(`${MFAPI_BASE}/${schemeCode}`);
-  if (!resp.ok) throw new Error(`mfapi.in returned ${resp.status} for scheme ${schemeCode}`);
+async function fetchNavHistory(schemeCodeOrKey) {
+  if (navApiCache[schemeCodeOrKey]) return navApiCache[schemeCodeOrKey];
+
+  // If it's a pseudo-key from captnemo (prefixed 'isin_'), should already be cached
+  if (String(schemeCodeOrKey).startsWith('isin_')) {
+    throw new Error('captnemo data should already be cached');
+  }
+
+  const resp = await fetch(`${MFAPI_BASE}/${schemeCodeOrKey}`);
+  if (!resp.ok) throw new Error(`mfapi.in returned ${resp.status} for scheme ${schemeCodeOrKey}`);
   const data = await resp.json();
   if (data.status !== 'SUCCESS' || !data.data?.length) {
-    throw new Error(`No NAV data for scheme ${schemeCode}`);
+    throw new Error(`No NAV data for scheme ${schemeCodeOrKey}`);
   }
-  // Normalise dates from "31-Dec-2024" to ISO "2024-12-31" for easy comparison
+
   const MONTHS = {Jan:'01',Feb:'02',Mar:'03',Apr:'04',May:'05',Jun:'06',
                   Jul:'07',Aug:'08',Sep:'09',Oct:'10',Nov:'11',Dec:'12'};
   const navHistory = data.data.map(row => {
     const [dd, mmm, yyyy] = row.date.split('-');
     const isoDate = `${yyyy}-${MONTHS[mmm] || mmm.padStart(2,'0')}-${dd.padStart(2,'0')}`;
     return { isoDate, nav: parseFloat(row.nav) };
-  });
-  // data is newest-first; keep that order for findNavOnOrBefore
+  }); // already newest-first from mfapi.in
+
   const result = { meta: data.meta, navHistory };
-  navApiCache[schemeCode] = result;
+  navApiCache[schemeCodeOrKey] = result;
   return result;
 }
 
@@ -258,16 +312,16 @@ async function fetchAndApplyNavs(fundId) {
   const setStatus = msg => { if (statusEl) statusEl.textContent = msg; };
   const setBtnText = txt => { if (btnEl) btnEl.textContent = txt; };
 
-  setStatus('Searching AMFI for ISIN…');
+  setStatus('Looking up ISIN via captnemo.in…');
   setBtnText('⏳ Fetching…');
 
   try {
-    // Step 1: ISIN → scheme code
-    const schemeCode = await findSchemeCodeByIsin(fund.isin.trim());
-    setStatus(`Found scheme ${schemeCode} — loading NAV history…`);
+    // Step 1: ISIN → scheme code (tries captnemo first, then AMFI full file)
+    const schemeCodeOrKey = await findSchemeCodeByIsin(fund.isin.trim());
+    setStatus(`Found scheme — loading NAV history…`);
 
-    // Step 2: full NAV history
-    const { meta, navHistory } = await fetchNavHistory(schemeCode);
+    // Step 2: full NAV history (may already be cached from captnemo)
+    const { meta, navHistory } = await fetchNavHistory(schemeCodeOrKey);
 
     // Step 3: start-of-year NAV = last trading day of (taxYear - 1)
     // Jan 1 is always a public holiday in India so we search for <= Dec 31 of prior year
@@ -287,8 +341,8 @@ async function fetchAndApplyNavs(fundId) {
     fund.navEnd        = endEntry.nav;
     fund.navStartDate  = startEntry.isoDate;
     fund.navEndDate    = endEntry.isoDate;
-    fund.navSource     = 'mfapi';
-    fund.navSchemeCode = schemeCode;
+    fund.navSource     = 'amfi';
+    fund.navSchemeCode = String(schemeCodeOrKey);
     fund.navSchemeName = meta?.scheme_name || '';
 
     renderFunds();
