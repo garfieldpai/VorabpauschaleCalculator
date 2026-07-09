@@ -36,7 +36,7 @@ const FRANKFURTER_BASE = 'https://api.frankfurter.dev/v1';
 // Example: 'https://vorabpauschale-proxy.YOUR-SUBDOMAIN.workers.dev'
 // ← paste your worker URL here after deploying (no trailing slash)
 // Example: 'https://vorabpauschale-proxy.garfieldpai.workers.dev'
-const PROXY_BASE = ''.replace(/\/$/, '');
+const PROXY_BASE = 'vorabpauschale-proxy.garfieldpai.workers.dev'.replace(/\/$/, '');
 
 const TOP_CURRENCIES = [
   { code: 'INR', label: 'INR — Indian Rupee' },
