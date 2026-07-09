@@ -29,6 +29,13 @@
 const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const FRANKFURTER_BASE = 'https://api.frankfurter.dev/v1';
 
+// Cloudflare Worker proxy — set this to your deployed worker URL.
+// Deploy worker.js to Cloudflare Workers (free, 100k req/day) to enable
+// auto-fetch of NAVs and FX rates. Without it, you'll get CORS errors.
+// See worker.js for deployment instructions.
+// Example: 'https://vorabpauschale-proxy.YOUR-SUBDOMAIN.workers.dev'
+const PROXY_BASE = ''; // ← paste your worker URL here after deploying
+
 const TOP_CURRENCIES = [
   { code: 'INR', label: 'INR — Indian Rupee' },
   { code: 'USD', label: 'USD — US Dollar' },
@@ -138,7 +145,10 @@ async function fetchFxRate(currency, isoDate) {
   const cacheKey = `${currency}_${isoDate}`;
   if (fxCache[cacheKey]) return fxCache[cacheKey];
 
-  const url = `${FRANKFURTER_BASE}/${isoDate}?from=${encodeURIComponent(currency)}&to=EUR`;
+  // Use proxy if configured (avoids CORS issues), otherwise try Frankfurter directly
+  const url = PROXY_BASE
+    ? `${PROXY_BASE}/fx?from=${encodeURIComponent(currency)}&date=${isoDate}`
+    : `${FRANKFURTER_BASE}/${isoDate}?from=${encodeURIComponent(currency)}&to=EUR`;
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`Frankfurter API returned ${resp.status}`);
   const data = await resp.json();
@@ -209,51 +219,54 @@ const isinSchemeCodeCache = {}; // isin → schemeCode
 async function findSchemeCodeByIsin(isin) {
   if (isinSchemeCodeCache[isin]) return isinSchemeCodeCache[isin];
 
-  // Strategy 1 (PRIMARY): mfdata.in — CORS-enabled, accepts ISIN search directly,
-  // aggregates from multiple sources including AMFI. Much more reliable than AMFI's
-  // own website (which blocks browser CORS requests) or captnemo (data quality issues).
-  // Endpoint: GET /api/v1/schemes/search?q={ISIN}
-  // Returns: { status, data: [{ scheme_code, scheme_name, isin_growth, isin_div_reinvest, ... }] }
-  try {
-    const resp = await fetch(
-      `https://mfdata.in/api/v1/schemes/search?q=${encodeURIComponent(isin)}`
-    );
-    if (resp.ok) {
-      const json = await resp.json();
-      if (json.status === 'success' && json.data?.length) {
-        // Find the entry whose ISIN matches exactly (search may return partials)
-        const match = json.data.find(s =>
-          s.isin_growth?.toUpperCase() === isin.toUpperCase() ||
-          s.isin_div_reinvest?.toUpperCase() === isin.toUpperCase()
-        ) || json.data[0]; // fall back to first result if no exact ISIN field match
-        const schemeCode = match.scheme_code;
-        isinSchemeCodeCache[isin] = schemeCode;
-        return schemeCode;
-      }
-    }
-  } catch (e) { /* fall through */ }
+  // CORS situation for browser-based GitHub Pages apps:
+  // - amfiindia.com: blocks CORS (no Access-Control-Allow-Origin header)
+  // - mfdata.in: claims CORS support but blocks in practice
+  // - captnemo.in: CORS works but has data quality bugs (wrong fund for some ISINs)
+  // - mfapi.in /mf/search: CORS works but searches names, not ISINs
+  //
+  // Solution: use allorigins.win (free, reliable CORS proxy) to fetch the
+  // authoritative AMFI NAVAll.txt which contains every scheme's ISIN.
+  // allorigins.win simply adds the required CORS headers and passes the response through.
 
-  // Strategy 2: mfapi.in search endpoint — searches by name, but ISIN strings
-  // sometimes appear in scheme names or metadata. Less reliable but worth trying.
+  // Strategy 1 (PRIMARY): AMFI NAVAll.txt via allorigins.win CORS proxy
   try {
-    const resp = await fetch(`${MFAPI_BASE}/search?q=${encodeURIComponent(isin)}`);
+    // Use our own Cloudflare Worker proxy if configured; fall back to allorigins.win
+    const amfiUrl = PROXY_BASE
+      ? `${PROXY_BASE}/amfi`
+      : `https://api.allorigins.win/raw?url=${encodeURIComponent('https://www.amfiindia.com/spages/NAVAll.txt')}`;
+    const resp = await fetch(amfiUrl);
     if (resp.ok) {
-      const results = await resp.json();
-      if (Array.isArray(results) && results.length > 0) {
-        const schemeCode = results[0].schemeCode;
-        isinSchemeCodeCache[isin] = schemeCode;
-        return schemeCode;
+      const text = await resp.text();
+      // Format: SchemeCode;ISINGrowth;ISINDivReinvest;SchemeName;NAV;Date
+      for (const line of text.split('\n')) {
+        const parts = line.split(';');
+        if (parts.length >= 3 &&
+            (parts[1].trim() === isin || parts[2].trim() === isin)) {
+          const schemeCode = parseInt(parts[0].trim(), 10);
+          if (!isNaN(schemeCode)) {
+            isinSchemeCodeCache[isin] = schemeCode;
+            return schemeCode;
+          }
+        }
       }
+      throw new Error(
+        `ISIN ${isin} not found in AMFI data. ` +
+        `Verify the ISIN is correct and the fund is AMFI-registered.`
+      );
     }
-  } catch (e) { /* fall through */ }
+  } catch (e) {
+    if (e.message.includes('not found in AMFI')) throw e;
+    // Proxy unavailable — fall through to captnemo
+    console.warn('allorigins CORS proxy failed:', e.message);
+  }
 
-  // Strategy 3 (LAST RESORT): captnemo.in — CORS-enabled but has data quality issues
-  // (has returned wrong fund data for some ISINs). Verify ISIN in response before using.
+  // Strategy 2 (FALLBACK): captnemo.in with strict ISIN verification
+  // Has known data quality issues — verify ISIN in response before using.
   try {
     const resp = await fetch(`${CAPTNEMO_BASE}/nav/${isin}`);
     if (resp.ok) {
       const data = await resp.json();
-      // Verify the returned ISIN matches what we requested
       if (data?.ISIN && data.ISIN.trim().toUpperCase() !== isin.toUpperCase()) {
         throw new Error(
           `captnemo returned data for ${data.ISIN} instead of ${isin}. ` +
@@ -287,7 +300,11 @@ async function fetchNavHistory(schemeCodeOrKey) {
     throw new Error('captnemo data should already be cached');
   }
 
-  const resp = await fetch(`${MFAPI_BASE}/${schemeCodeOrKey}`);
+  // Use proxy if configured for consistent CORS handling
+  const navUrl = PROXY_BASE
+    ? `${PROXY_BASE}/nav/${schemeCodeOrKey}`
+    : `${MFAPI_BASE}/${schemeCodeOrKey}`;
+  const resp = await fetch(navUrl);
   if (!resp.ok) throw new Error(`mfapi.in returned ${resp.status} for scheme ${schemeCodeOrKey}`);
   const data = await resp.json();
   if (data.status !== 'SUCCESS' || !data.data?.length) {
