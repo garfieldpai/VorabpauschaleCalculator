@@ -209,58 +209,60 @@ const isinSchemeCodeCache = {}; // isin → schemeCode
 async function findSchemeCodeByIsin(isin) {
   if (isinSchemeCodeCache[isin]) return isinSchemeCodeCache[isin];
 
-  // Strategy 1: captnemo.in accepts ISIN directly and returns the full NAV history
-  // in one shot — we can extract the scheme code from the meta, OR just use
-  // captnemo's own data structure directly (it returns historical_nav as [[date,nav],...])
-  // We try captnemo first since it's ISIN-native.
+  // Strategy 1 (PRIMARY): AMFI NAVAll.txt — authoritative, includes ISIN column.
+  // Preferred over captnemo.in which has known data quality issues (has returned
+  // wrong fund data for some ISINs, e.g. INF209K01BR9 returning INF179K01CR2 data).
+  try {
+    const amfiResp = await fetch('https://www.amfiindia.com/spages/NAVAll.txt');
+    if (amfiResp.ok) {
+      const text = await amfiResp.text();
+      // Format: SchemeCode;ISINGrowth;ISINDivReinvest;SchemeName;NAV;Date
+      for (const line of text.split('\n')) {
+        const parts = line.split(';');
+        if (parts.length >= 3 &&
+            (parts[1].trim() === isin || parts[2].trim() === isin)) {
+          const schemeCode = parseInt(parts[0].trim(), 10);
+          if (!isNaN(schemeCode)) {
+            isinSchemeCodeCache[isin] = schemeCode;
+            return schemeCode;
+          }
+        }
+      }
+      // File loaded but ISIN not found — genuine miss, not a network issue
+      throw new Error(`ISIN ${isin} not found in AMFI data. Verify the ISIN is correct and the fund is AMFI-registered.`);
+    }
+  } catch (e) {
+    if (e.message.includes('not found in AMFI')) throw e;
+    // Network/CORS error — fall through to captnemo
+  }
+
+  // Strategy 2 (FALLBACK): captnemo.in — accepts ISIN directly but has known
+  // data quality issues. We verify the returned ISIN matches before trusting it.
   try {
     const resp = await fetch(`${CAPTNEMO_BASE}/nav/${isin}`);
     if (resp.ok) {
       const data = await resp.json();
-      // captnemo returns { ISIN, name, nav, date, historical_nav: [["YYYY-MM-DD", nav],...] }
-      if (data && data.historical_nav?.length) {
-        // Cache the full history directly to avoid a second mfapi.in call
+      // Verify captnemo actually returned data for the ISIN we asked about
+      if (data?.ISIN && data.ISIN.trim().toUpperCase() !== isin.toUpperCase()) {
+        throw new Error(
+          `captnemo returned data for ${data.ISIN} instead of ${isin}. ` +
+          `AMFI was also unavailable. Please try again later or enter NAV manually.`
+        );
+      }
+      if (data?.historical_nav?.length) {
         const navHistory = data.historical_nav
           .map(([isoDate, nav]) => ({ isoDate, nav: parseFloat(nav) }))
-          .sort((a, b) => b.isoDate.localeCompare(a.isoDate)); // newest first
+          .sort((a, b) => b.isoDate.localeCompare(a.isoDate));
         navApiCache[`isin_${isin}`] = { meta: { scheme_name: data.name }, navHistory };
-        isinSchemeCodeCache[isin] = `isin_${isin}`; // use ISIN as a pseudo scheme code key
+        isinSchemeCodeCache[isin] = `isin_${isin}`;
         return `isin_${isin}`;
       }
     }
-  } catch (e) { /* fall through to mfapi */ }
-
-  // Strategy 2: mfapi.in full scheme list — download all ~14k schemes and find ISIN match
-  // This is large (~2MB) but cached after first fetch
-  try {
-    const resp = await fetch(MFAPI_BASE);
-    if (!resp.ok) throw new Error(`mfapi.in list returned ${resp.status}`);
-    const allSchemes = await resp.json(); // [{schemeCode, schemeName}]
-
-    // allSchemes doesn't include ISINs — we need to fetch each scheme's meta to check ISIN.
-    // That's 14k requests which is impractical. Instead, use the search endpoint with
-    // keywords from the ISIN (last 6 chars are often scheme-specific) to narrow it down.
-    // Better: fetch the AMFI full NAV text file which DOES include ISINs in one request.
-    const amfiResp = await fetch('https://www.amfiindia.com/spages/NAVAll.txt');
-    if (!amfiResp.ok) throw new Error('AMFI NAV file unavailable');
-    const text = await amfiResp.text();
-
-    // Format: SchemeCode;ISINGrowth;ISINDivReinvest;SchemeName;NAV;Date
-    const lines = text.split('\n');
-    for (const line of lines) {
-      const parts = line.split(';');
-      if (parts.length >= 3 && (parts[1].trim() === isin || parts[2].trim() === isin)) {
-        const schemeCode = parseInt(parts[0].trim(), 10);
-        if (!isNaN(schemeCode)) {
-          isinSchemeCodeCache[isin] = schemeCode;
-          return schemeCode;
-        }
-      }
-    }
-    throw new Error(`ISIN ${isin} not found in AMFI data. Verify the ISIN is correct.`);
   } catch (e) {
-    throw new Error(`Could not find scheme for ISIN ${isin}: ${e.message}`);
+    throw new Error(`Both AMFI and captnemo failed for ISIN ${isin}: ${e.message}`);
   }
+
+  throw new Error(`Could not find NAV data for ISIN ${isin}. Please enter NAV manually.`);
 }
 
 async function fetchNavHistory(schemeCodeOrKey) {
