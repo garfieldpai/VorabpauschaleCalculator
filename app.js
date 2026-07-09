@@ -209,44 +209,55 @@ const isinSchemeCodeCache = {}; // isin → schemeCode
 async function findSchemeCodeByIsin(isin) {
   if (isinSchemeCodeCache[isin]) return isinSchemeCodeCache[isin];
 
-  // Strategy 1 (PRIMARY): AMFI NAVAll.txt — authoritative, includes ISIN column.
-  // Preferred over captnemo.in which has known data quality issues (has returned
-  // wrong fund data for some ISINs, e.g. INF209K01BR9 returning INF179K01CR2 data).
+  // Strategy 1 (PRIMARY): mfdata.in — CORS-enabled, accepts ISIN search directly,
+  // aggregates from multiple sources including AMFI. Much more reliable than AMFI's
+  // own website (which blocks browser CORS requests) or captnemo (data quality issues).
+  // Endpoint: GET /api/v1/schemes/search?q={ISIN}
+  // Returns: { status, data: [{ scheme_code, scheme_name, isin_growth, isin_div_reinvest, ... }] }
   try {
-    const amfiResp = await fetch('https://www.amfiindia.com/spages/NAVAll.txt');
-    if (amfiResp.ok) {
-      const text = await amfiResp.text();
-      // Format: SchemeCode;ISINGrowth;ISINDivReinvest;SchemeName;NAV;Date
-      for (const line of text.split('\n')) {
-        const parts = line.split(';');
-        if (parts.length >= 3 &&
-            (parts[1].trim() === isin || parts[2].trim() === isin)) {
-          const schemeCode = parseInt(parts[0].trim(), 10);
-          if (!isNaN(schemeCode)) {
-            isinSchemeCodeCache[isin] = schemeCode;
-            return schemeCode;
-          }
-        }
+    const resp = await fetch(
+      `https://mfdata.in/api/v1/schemes/search?q=${encodeURIComponent(isin)}`
+    );
+    if (resp.ok) {
+      const json = await resp.json();
+      if (json.status === 'success' && json.data?.length) {
+        // Find the entry whose ISIN matches exactly (search may return partials)
+        const match = json.data.find(s =>
+          s.isin_growth?.toUpperCase() === isin.toUpperCase() ||
+          s.isin_div_reinvest?.toUpperCase() === isin.toUpperCase()
+        ) || json.data[0]; // fall back to first result if no exact ISIN field match
+        const schemeCode = match.scheme_code;
+        isinSchemeCodeCache[isin] = schemeCode;
+        return schemeCode;
       }
-      // File loaded but ISIN not found — genuine miss, not a network issue
-      throw new Error(`ISIN ${isin} not found in AMFI data. Verify the ISIN is correct and the fund is AMFI-registered.`);
     }
-  } catch (e) {
-    if (e.message.includes('not found in AMFI')) throw e;
-    // Network/CORS error — fall through to captnemo
-  }
+  } catch (e) { /* fall through */ }
 
-  // Strategy 2 (FALLBACK): captnemo.in — accepts ISIN directly but has known
-  // data quality issues. We verify the returned ISIN matches before trusting it.
+  // Strategy 2: mfapi.in search endpoint — searches by name, but ISIN strings
+  // sometimes appear in scheme names or metadata. Less reliable but worth trying.
+  try {
+    const resp = await fetch(`${MFAPI_BASE}/search?q=${encodeURIComponent(isin)}`);
+    if (resp.ok) {
+      const results = await resp.json();
+      if (Array.isArray(results) && results.length > 0) {
+        const schemeCode = results[0].schemeCode;
+        isinSchemeCodeCache[isin] = schemeCode;
+        return schemeCode;
+      }
+    }
+  } catch (e) { /* fall through */ }
+
+  // Strategy 3 (LAST RESORT): captnemo.in — CORS-enabled but has data quality issues
+  // (has returned wrong fund data for some ISINs). Verify ISIN in response before using.
   try {
     const resp = await fetch(`${CAPTNEMO_BASE}/nav/${isin}`);
     if (resp.ok) {
       const data = await resp.json();
-      // Verify captnemo actually returned data for the ISIN we asked about
+      // Verify the returned ISIN matches what we requested
       if (data?.ISIN && data.ISIN.trim().toUpperCase() !== isin.toUpperCase()) {
         throw new Error(
           `captnemo returned data for ${data.ISIN} instead of ${isin}. ` +
-          `AMFI was also unavailable. Please try again later or enter NAV manually.`
+          `All sources failed — please enter NAV manually.`
         );
       }
       if (data?.historical_nav?.length) {
@@ -259,10 +270,13 @@ async function findSchemeCodeByIsin(isin) {
       }
     }
   } catch (e) {
-    throw new Error(`Both AMFI and captnemo failed for ISIN ${isin}: ${e.message}`);
+    console.warn('captnemo fallback failed:', e.message);
   }
 
-  throw new Error(`Could not find NAV data for ISIN ${isin}. Please enter NAV manually.`);
+  throw new Error(
+    `Could not find NAV data for ISIN ${isin}. ` +
+    `Verify the ISIN is correct, or enter NAV manually.`
+  );
 }
 
 async function fetchNavHistory(schemeCodeOrKey) {
@@ -314,13 +328,13 @@ async function fetchAndApplyNavs(fundId) {
   const setStatus = msg => { if (statusEl) statusEl.textContent = msg; };
   const setBtnText = txt => { if (btnEl) btnEl.textContent = txt; };
 
-  setStatus('Looking up ISIN via captnemo.in…');
+  setStatus('Looking up ISIN via mfdata.in…');
   setBtnText('⏳ Fetching…');
 
   try {
-    // Step 1: ISIN → scheme code (tries captnemo first, then AMFI full file)
+    // Step 1: ISIN → scheme code (mfdata.in primary, mfapi.in + captnemo fallbacks)
     const schemeCodeOrKey = await findSchemeCodeByIsin(fund.isin.trim());
-    setStatus(`Found scheme — loading NAV history…`);
+    setStatus(`Found scheme — loading NAV history from mfapi.in…`);
 
     // Step 2: full NAV history (may already be cached from captnemo)
     const { meta, navHistory } = await fetchNavHistory(schemeCodeOrKey);
@@ -536,7 +550,7 @@ function renderFunds() {
       ${fund.currency === 'INR' ? `
       <div class="grid cols-2" style="margin-bottom:14px; align-items:end; background:var(--mono-soft); border-radius:var(--radius); padding:12px 14px;">
         <div class="field">
-          <label style="color:var(--mono);">Auto-fetch NAVs from AMFI via mfapi.in (Indian MFs only)</label>
+          <label style="color:var(--mono);">Auto-fetch NAVs from AMFI via mfdata.in + mfapi.in (Indian MFs only)</label>
           <div style="font-family:'IBM Plex Mono',monospace; font-size:12.5px; padding:8px 10px; border:1px solid #b8d4c4; border-radius:4px; background:#fff;" data-nav-status="${fund.id}">
             ${fund.navSource === 'mfapi'
               ? `${fund.navSchemeName || 'Scheme ' + fund.navSchemeCode} · start: ${fund.navStart} (${fund.navStartDate}) · end: ${fund.navEnd} (${fund.navEndDate})`
