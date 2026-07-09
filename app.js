@@ -34,7 +34,9 @@ const FRANKFURTER_BASE = 'https://api.frankfurter.dev/v1';
 // auto-fetch of NAVs and FX rates. Without it, you'll get CORS errors.
 // See worker.js for deployment instructions.
 // Example: 'https://vorabpauschale-proxy.YOUR-SUBDOMAIN.workers.dev'
-const PROXY_BASE = 'https://vorabpauschale-proxy.garfieldpai.workers.dev/'; // ← paste your worker URL here after deploying
+// ← paste your worker URL here after deploying (no trailing slash)
+// Example: 'https://vorabpauschale-proxy.garfieldpai.workers.dev'
+const PROXY_BASE = ''.replace(/\/$/, '');
 
 const TOP_CURRENCIES = [
   { code: 'INR', label: 'INR — Indian Rupee' },
